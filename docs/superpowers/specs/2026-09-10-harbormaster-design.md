@@ -1,9 +1,9 @@
-# portkeep — Design Spec
+# harbormaster — Design Spec
 
 **Date:** 2026-09-10
 **Status:** Draft, awaiting review
 **License:** MIT
-**Repo:** github.com/moeritze/portkeep
+**Repo:** github.com/moeritze/harbormaster
 
 ## 1. Problem
 
@@ -16,7 +16,7 @@ No existing tool tracks *who* owns a local port, *from which worktree*, *for whi
 
 ## 2. Goals
 
-- A single, agent-agnostic CLI (`portkeep`) that maintains a self-cleaning registry of local dev servers: port, pid, repo, worktree, branch, owning agent session, task label.
+- A single, agent-agnostic CLI (`harbormaster`) that maintains a self-cleaning registry of local dev servers: port, pid, repo, worktree, branch, owning agent session, task label.
 - Deterministic, stable port per worktree so OAuth redirects, Firebase auth domains, and webhooks can be configured once.
 - Adapters that make agents (Claude Code, Cursor, Codex CLI) aware of the registry at session start, stop them from killing foreign servers, and release their own servers at session end.
 - One shared skill document, in the open Agent Skills format, loaded by every supported agent.
@@ -26,7 +26,7 @@ No existing tool tracks *who* owns a local port, *from which worktree*, *for whi
 
 - Background daemon or socket server.
 - Reverse proxy / `*.localhost` hostnames.
-- Multi-service project config (`.portkeep.toml`). Planned v2.
+- Multi-service project config (`.harbormaster.toml`). Planned v2.
 - Web dashboard.
 - Windows guarantees. Best effort only.
 - Docker port mappings.
@@ -38,17 +38,17 @@ Approach: **lockfile registry + process wrapper + agent hooks.** No long-running
 
 ```
                 ┌──────────────────────────────┐
-  agent hooks ─►│  portkeep hook <agent> <ev>  │
+  agent hooks ─►│  harbormaster hook <agent> <ev>  │
                 └──────────────┬───────────────┘
                                │ normalized event
                 ┌──────────────▼───────────────┐
-  portkeep run ►│        core (Go)             │◄── portkeep ls/check/kill/...
+  harbormaster run ►│        core (Go)             │◄── harbormaster ls/check/kill/...
                 │ registry · liveness · ports  │
                 │ detect · gitctx · runner     │
                 └──────────────┬───────────────┘
                                │ flock + atomic write
                 ┌──────────────▼───────────────┐
-                │ ~/.local/state/portkeep/     │
+                │ ~/.local/state/harbormaster/     │
                 │   registry.json  history.jsonl│
                 └──────────────────────────────┘
 ```
@@ -57,7 +57,7 @@ The registry file is the single source of truth. Every command reads it, prunes 
 
 ## 5. Registry
 
-**Location:** `$XDG_STATE_HOME/portkeep/registry.json`, falling back to `~/.local/state/portkeep/`. Override with `PORTKEEP_HOME`. Sibling files: `registry.lock` (flock target), `history.jsonl` (append-only log of pruned/released entries).
+**Location:** `$XDG_STATE_HOME/harbormaster/registry.json`, falling back to `~/.local/state/harbormaster/`. Override with `HARBORMASTER_HOME`. Sibling files: `registry.lock` (flock target), `history.jsonl` (append-only log of pruned/released entries).
 
 **Schema (version 1):**
 
@@ -96,28 +96,28 @@ The registry file is the single source of truth. Every command reads it, prunes 
 ## 6. CLI
 
 ```
-portkeep run [--port N] [--label "..."] [--env NAME] -- <cmd...>
-portkeep ls  [--json] [--all]
-portkeep check <port>
-portkeep claim <port> [--pid P] [--label "..."]
-portkeep release <port> | --session ID | --all-mine
-portkeep kill <port> [--force]
-portkeep port
-portkeep gc
-portkeep history [--json]
-portkeep hook <agent> <event>
-portkeep install <agent> [--project] [--agents-md]
-portkeep uninstall <agent> [--project]
-portkeep version
+harbormaster run [--port N] [--label "..."] [--env NAME] -- <cmd...>
+harbormaster ls  [--json] [--all]
+harbormaster check <port>
+harbormaster claim <port> [--pid P] [--label "..."]
+harbormaster release <port> | --session ID | --all-mine
+harbormaster kill <port> [--force]
+harbormaster port
+harbormaster gc
+harbormaster history [--json]
+harbormaster hook <agent> <event>
+harbormaster install <agent> [--project] [--agents-md]
+harbormaster uninstall <agent> [--project]
+harbormaster version
 ```
 
 ### 6.1 `run`
 
 1. Resolve port: `--port` flag, then `PORT` env, then deterministic worktree port (§7).
-2. If the port has a foreign registry entry: exit 1, print owner (agent, session, worktree, label), suggest `portkeep port`. If the port is held by an unregistered process: exit 1, print pid and command from the OS.
+2. If the port has a foreign registry entry: exit 1, print owner (agent, session, worktree, label), suggest `harbormaster port`. If the port is held by an unregistered process: exit 1, print pid and command from the OS.
 3. Spawn `<cmd>` with `PORT=N` injected. `--env NAME` injects `NAME=N` instead of or in addition to `PORT` (repeatable). Stdio is passed through so the agent sees server output.
 4. Register an entry with the child's pid immediately after spawn. Poll until the port is listening, timeout 60 s. On timeout warn on stderr, keep the entry (the pid check will prune it if the process dies).
-5. On child exit, or on SIGINT/SIGTERM/SIGHUP to `portkeep`, forward the signal to the child's process group, wait up to 10 s, then SIGKILL. Remove the entry. Exit with the child's exit code.
+5. On child exit, or on SIGINT/SIGTERM/SIGHUP to `harbormaster`, forward the signal to the child's process group, wait up to 10 s, then SIGKILL. Remove the entry. Exit with the child's exit code.
 
 The child runs in its own process group so that killing the wrapper kills the whole server tree (Next.js spawns workers).
 
@@ -138,7 +138,7 @@ Removes entries without killing unless `--kill` is given. `--session ID` release
 Human-readable table by default. `--json` everywhere for hooks and agents. Errors go to stderr as a single actionable line, for example:
 
 ```
-port 3000 owned by claude session 0132… in ../riftbinder-wt/auth ("login flow", 12m). Run `portkeep port` for this worktree's port.
+port 3000 owned by claude session 0132… in ../riftbinder-wt/auth ("login flow", 12m). Run `harbormaster port` for this worktree's port.
 ```
 
 Exit codes: 0 ok, 1 foreign/denied, 2 unregistered conflict, 3 usage error, 4 registry/lock error.
@@ -151,27 +151,27 @@ Exit codes: 0 ok, 1 foreign/denied, 2 unregistered conflict, 3 usage error, 4 re
 port = base + (fnv1a64(abs(worktree_path)) % range)
 ```
 
-Defaults: `base=3000`, `range=1000` → 3000–3999. Configurable via `PORTKEEP_BASE`, `PORTKEEP_RANGE`. If the computed port is busy (registry or OS), probe upward within the range until free. Outside git, the hash input is the current directory.
+Defaults: `base=3000`, `range=1000` → 3000–3999. Configurable via `HARBORMASTER_BASE`, `HARBORMASTER_RANGE`. If the computed port is busy (registry or OS), probe upward within the range until free. Outside git, the hash input is the current directory.
 
-`portkeep port` prints the resolved port so it can be used in `.env.local`, OAuth settings, etc.
+`harbormaster port` prints the resolved port so it can be used in `.env.local`, OAuth settings, etc.
 
-**v2 (out of scope, but the design leaves room):** `.portkeep.toml` in the repo declaring named services with base ports; per-worktree offset applied to each. The registry schema needs no change; entries gain an optional `service` field.
+**v2 (out of scope, but the design leaves room):** `.harbormaster.toml` in the repo declaring named services with base ports; per-worktree offset applied to each. The registry schema needs no change; entries gain an optional `service` field.
 
 ## 8. Command detection (`internal/detect`)
 
 A regex table classifies shell commands into:
 
 - `kill`: `kill`, `pkill`, `killall`, `fuser -k`, `lsof -ti:N`, `npx kill-port`, `kill-port`. Extract target ports and pids where present.
-- `server_start`: `npm|pnpm|yarn|bun run dev|start|serve|preview`, `next dev`, `vite`, `astro dev`, `nuxt dev`, `remix dev`, `ng serve`, `python -m http.server`, `uvicorn`, `flask run`, `rails s`, `php artisan serve`, `go run` with `--port`, `cargo run` with `--port`. Detect whether already wrapped in `portkeep run`.
+- `server_start`: `npm|pnpm|yarn|bun run dev|start|serve|preview`, `next dev`, `vite`, `astro dev`, `nuxt dev`, `remix dev`, `ng serve`, `python -m http.server`, `uvicorn`, `flask run`, `rails s`, `php artisan serve`, `go run` with `--port`, `cargo run` with `--port`. Detect whether already wrapped in `harbormaster run`.
 - `port_ref`: explicit `--port N`, `-p N`, `PORT=N`, `localhost:N`, `:N` in URLs.
 
-The classifier is heuristic by design. A miss degrades to awareness-only. A false positive produces a deny the user can override with `--force` or by setting `PORTKEEP_STRICT=0`. The table is data-driven and tested against a fixture list of at least 50 commands.
+The classifier is heuristic by design. A miss degrades to awareness-only. A false positive produces a deny the user can override with `--force` or by setting `HARBORMASTER_STRICT=0`. The table is data-driven and tested against a fixture list of at least 50 commands.
 
 ## 9. Agent adapters
 
 ### 9.1 Internal event model
 
-`portkeep hook <agent> <event>` reads the agent's JSON from stdin, normalizes it, runs core logic, and writes the agent's expected JSON to stdout.
+`harbormaster hook <agent> <event>` reads the agent's JSON from stdin, normalizes it, runs core logic, and writes the agent's expected JSON to stdout.
 
 ```
 Normalized: { kind: session_start | pre_shell | post_shell | session_end,
@@ -191,8 +191,8 @@ Exact event names, payload shapes, and response formats for Cursor and Codex are
 
 | Event         | Behavior |
 |---------------|----------|
-| session_start | Return additional context: `portkeep ls` table, this worktree's deterministic port, and a one-line rule: "Start dev servers with `portkeep run -- <cmd>`." |
-| pre_shell     | (1) `kill` class targeting a foreign-owned port or pid → **deny** with owner info. (2) `server_start` not wrapped in `portkeep run` → inject context suggesting the wrapper; **allow** by default, **deny** when `PORTKEEP_STRICT=1`. (3) `port_ref` to a foreign-owned port in a server-start command → **deny**. |
+| session_start | Return additional context: `harbormaster ls` table, this worktree's deterministic port, and a one-line rule: "Start dev servers with `harbormaster run -- <cmd>`." |
+| pre_shell     | (1) `kill` class targeting a foreign-owned port or pid → **deny** with owner info. (2) `server_start` not wrapped in `harbormaster run` → inject context suggesting the wrapper; **allow** by default, **deny** when `HARBORMASTER_STRICT=1`. (3) `port_ref` to a foreign-owned port in a server-start command → **deny**. |
 | post_shell    | If a `server_start` ran unwrapped in the background, best-effort `claim`: scan for new listeners whose process cwd is under this worktree and register them. |
 | session_end   | `release --session <id> --kill`. |
 
@@ -200,13 +200,13 @@ Hook execution must complete in under 100 ms in the common case (registry read +
 
 ### 9.3 Install
 
-`portkeep install claude|cursor|codex` merges hook definitions into the user-level config (`~/.claude/settings.json`, `~/.cursor/hooks.json`, `~/.codex/config.toml`). Existing config is preserved; portkeep entries are marked so `uninstall` can remove exactly what it added. `--project` writes to the repo-level equivalent instead. A backup of the config file is written next to it before the first modification.
+`harbormaster install claude|cursor|codex` merges hook definitions into the user-level config (`~/.claude/settings.json`, `~/.cursor/hooks.json`, `~/.codex/config.toml`). Existing config is preserved; harbormaster entries are marked so `uninstall` can remove exactly what it added. `--project` writes to the repo-level equivalent instead. A backup of the config file is written next to it before the first modification.
 
 `--agents-md` appends a short fenced block to `AGENTS.md` for agents without hooks.
 
 ### 9.4 Shared skill
 
-`skills/portkeep/SKILL.md` is the single canonical skill, written in the Agent Skills format (`.agents/skills/` convention). `install` symlinks it into `~/.claude/skills/portkeep`, `~/.cursor/skills/portkeep`, `~/.codex/skills/portkeep`, or `.agents/skills/portkeep` with `--project`. The Claude plugin in `adapters/claude-plugin/` references the same file via symlink. Content: when to use, `run` usage, reading `ls`, handling a foreign-port error, never bypass with `--force` without asking the user. Target length under 60 lines.
+`skills/harbormaster/SKILL.md` is the single canonical skill, written in the Agent Skills format (`.agents/skills/` convention). `install` symlinks it into `~/.claude/skills/harbormaster`, `~/.cursor/skills/harbormaster`, `~/.codex/skills/harbormaster`, or `.agents/skills/harbormaster` with `--project`. The Claude plugin in `adapters/claude-plugin/` references the same file via symlink. Content: when to use, `run` usage, reading `ls`, handling a foreign-port error, never bypass with `--force` without asking the user. Target length under 60 lines.
 
 ## 10. Safety procedures
 
@@ -214,13 +214,13 @@ These apply to the tool's runtime behavior, separate from repository security (�
 
 **Process safety**
 - `kill` and `release --kill` never signal a pid that is not in the registry, unless `--force`. `--force` still refuses pid 1, the caller's own pid, and any pid whose owner uid differs from the caller.
-- Signals are sent to the process group created by `run`, never to arbitrary groups. For `claim`ed pids (not spawned by portkeep), only the pid itself is signaled.
+- Signals are sent to the process group created by `run`, never to arbitrary groups. For `claim`ed pids (not spawned by harbormaster), only the pid itself is signaled.
 - Never runs anything with elevated privileges. No `sudo` anywhere in the codebase or docs.
-- Hooks default to **allow** on any internal error. A broken portkeep must never block an agent from working. Errors are logged to `$PORTKEEP_HOME/hook-errors.log`.
+- Hooks default to **allow** on any internal error. A broken harbormaster must never block an agent from working. Errors are logged to `$HARBORMASTER_HOME/hook-errors.log`.
 
 **Data safety**
 - The registry stores only paths, pids, ports, branch names, session ids, and user-supplied labels. Never environment variables, never command arguments beyond the command line as typed. `run` redacts values of environment-style arguments matching `*KEY*`, `*SECRET*`, `*TOKEN*`, `*PASSWORD*` in the stored `cmd` field.
-- No network access, no telemetry, no update checks. `portkeep version` is offline.
+- No network access, no telemetry, no update checks. `harbormaster version` is offline.
 - Registry and history are user-readable only (`0600`). The state directory is `0700`.
 - `install` never writes outside the agent config directories and the skill directories listed in §9.3. Every file it touches is listed in `--dry-run` output.
 
@@ -235,8 +235,8 @@ These apply to the tool's runtime behavior, separate from repository security (�
 ## 11. Repository layout
 
 ```
-portkeep/
-  cmd/portkeep/main.go
+harbormaster/
+  cmd/harbormaster/main.go
   internal/
     registry/      schema, lock, prune, atomic write, history
     liveness/      pid alive, port listening (darwin, linux; windows best effort)
@@ -247,11 +247,11 @@ portkeep/
     hooks/         core event logic
     hooks/adapters/claude, cursor, codex
     install/       config merge/unmerge per agent
-  skills/portkeep/SKILL.md
+  skills/harbormaster/SKILL.md
   adapters/claude-plugin/
     .claude-plugin/plugin.json
     hooks/hooks.json
-    skills/portkeep -> ../../../skills/portkeep (symlink)
+    skills/harbormaster -> ../../../skills/harbormaster (symlink)
   docs/superpowers/specs/
   .github/workflows/
   .goreleaser.yaml
@@ -291,11 +291,11 @@ Single Go module, Go 1.27, standard library plus at most: a CLI framework (cobra
 - Release workflow requires an environment with a required reviewer (the maintainer), so a compromised PR cannot publish.
 
 **Supply-chain for users**
-- README documents: verify with `cosign verify-blob`, or install via `go install github.com/moeritze/portkeep/cmd/portkeep@vX.Y.Z` to build from source.
+- README documents: verify with `cosign verify-blob`, or install via `go install github.com/moeritze/harbormaster/cmd/harbormaster@vX.Y.Z` to build from source.
 - `go.sum` committed. `GOFLAGS=-mod=readonly` in CI.
 
 **Hooks and agent configs in this repo**
-- The Claude plugin's `hooks.json` and any `.claude/settings.json` in the repo only invoke `portkeep` itself. No inline shell. Reviewers check this on every PR touching `adapters/`.
+- The Claude plugin's `hooks.json` and any `.claude/settings.json` in the repo only invoke `harbormaster` itself. No inline shell. Reviewers check this on every PR touching `adapters/`.
 
 ## 13. Testing strategy
 
