@@ -202,7 +202,12 @@ func (s *Store) Update(fn func(f *File) error) error {
 	return s.commit(f, pruned)
 }
 
-// Remove drops the entry with the given id. ok is false when it was not present.
+// Remove drops the entry with the given id. ok is false when it was not
+// present. The target is taken out BEFORE the rest is pruned: the caller
+// (kill, release, the run wrapper, a session-end hook) has already dealt
+// with that process and wants to record its own reason; if pruning ran
+// first it would claim the same entry as pid_dead and the caller's record
+// would never be written.
 func (s *Store) Remove(id string) (Entry, bool, error) {
 	unlock, err := lock(s.path(lockName), lockTimeout)
 	if err != nil {
@@ -210,7 +215,7 @@ func (s *Store) Remove(id string) (Entry, bool, error) {
 	}
 	defer unlock()
 
-	f, pruned, err := s.readPruned()
+	f, err := s.read()
 	if err != nil {
 		return Entry{}, false, err
 	}
@@ -226,6 +231,7 @@ func (s *Store) Remove(id string) (Entry, bool, error) {
 		kept = append(kept, e)
 	}
 	f.Entries = kept
+	pruned := s.prune(f)
 	if err := s.commit(f, pruned); err != nil {
 		return Entry{}, false, err
 	}
