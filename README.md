@@ -12,7 +12,11 @@ Not affiliated with Phabricator's Harbormaster.
 
 ## Install
 
-    go install github.com/moeritze/harbormaster/cmd/harbormaster@latest
+    go install github.com/moeritze/harbormaster/cmd/harbormaster@main
+
+There is no tagged release yet, so `@main` builds the current tip. Tagged,
+signed releases (cosign keyless, SBOM, SLSA provenance) are planned; pin a
+commit with `@<commit>` if you want a fixed build today.
 
 `make install` also links `hm` as a short alias.
 
@@ -37,6 +41,16 @@ registration: harbormaster never signals a pid it has no entry for, so `claim`
 a server it did not start before killing it. Even `--force` never touches
 pid 1, your own pid, or another user's process.
 
+If you have no session id at all, `kill` and `release <port>` / `release
+--all-mine` refuse to act on anything and tell you to set
+`HARBORMASTER_SESSION` (or pass `--force`). Reads -- `ls`, `check`, `run`'s
+conflict check -- still fall back to matching the worktree, so nothing about
+the day-to-day flow changes.
+
+`claim <port> --pid P` registers P only if the OS agrees that P is the process
+listening on that port; `claim --force` registers it anyway, which you need
+when `lsof` is unavailable (including on Windows).
+
 ### Ports
 
 `harbormaster port` prints a stable port for the current worktree, derived from
@@ -47,7 +61,22 @@ its path and kept inside `HARBORMASTER_BASE`..`HARBORMASTER_BASE+HARBORMASTER_RA
 
 0 ok · 1 denied/foreign · 2 unregistered conflict · 3 usage · 4 registry error
 
+### State directory
+
+State lives in the first of these that is set:
+
+1. `HARBORMASTER_HOME`
+2. `$XDG_STATE_HOME/harbormaster`
+3. `~/.local/state/harbormaster`
+
+It holds `registry.json`, `history.jsonl`, and the `registry.lock` flock
+target. harbormaster creates the directory with mode 0700 and never re-chmods
+an existing one: if it finds a symlink, a directory group or other can write,
+or one owned by another user, it refuses to run and says which `chmod` fixes
+it.
+
 ## Security
 
-See SECURITY.md. No network access, no telemetry. State lives in
-`~/.local/state/harbormaster` with mode 0700.
+See SECURITY.md, including what harbormaster explicitly does not guarantee:
+ownership separates concurrent sessions of one OS user, it is not a boundary
+against a hostile process running as you. No network access, no telemetry.
