@@ -27,3 +27,9 @@ install: build
 
 clean:
 	rm -rf bin coverage.out
+
+release-check:
+	go run github.com/goreleaser/goreleaser/v2@v2.18.1 check
+
+release-dry:
+	HOMEBREW_TAP_TOKEN= go run github.com/goreleaser/goreleaser/v2@v2.18.1 release --snapshot --clean --skip=publish,sign,sbom
