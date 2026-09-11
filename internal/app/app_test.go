@@ -1,7 +1,10 @@
 package app_test
 
 import (
+	"errors"
+	"io"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -119,5 +122,22 @@ func TestMyPortResolvesAndSkipsForeign(t *testing.T) {
 	}
 	if p3 == p1 {
 		t.Fatalf("expected MyPort to skip the foreign-held port %d", p1)
+	}
+}
+
+// TestNewWrapsConfigErrorsAsUsage: a bad HARBORMASTER_BASE is something the
+// caller can fix, so it must reach main as ErrUsage (exit 3), not as a
+// registry failure (exit 4).
+func TestNewWrapsConfigErrorsAsUsage(t *testing.T) {
+	getenv := getenvMap(map[string]string{
+		"HARBORMASTER_HOME": filepath.Join(t.TempDir(), "hm"),
+		"HARBORMASTER_BASE": "abc",
+	})
+	if _, err := app.New(getenv, io.Discard, io.Discard); err == nil {
+		t.Fatal("expected an error for HARBORMASTER_BASE=abc")
+	} else if !errors.Is(err, app.ErrUsage) {
+		t.Fatalf("%v is not app.ErrUsage", err)
+	} else if !strings.Contains(err.Error(), "HARBORMASTER_BASE") {
+		t.Fatalf("wrapping lost the cause: %v", err)
 	}
 }

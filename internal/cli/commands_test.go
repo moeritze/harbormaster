@@ -3,6 +3,7 @@ package cli_test
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -128,14 +129,36 @@ func TestCheckExitCodes(t *testing.T) {
 	if c := exitCode(h.run("check", "3000")); c != 0 {
 		t.Fatalf("free: %d", c)
 	}
+	if !strings.Contains(h.out.String(), "port 3000: free") {
+		t.Fatalf("free check should print one stdout line, got %q", h.out.String())
+	}
 	h.seed(t, registry.Entry{ID: "mine", Port: 3000, PID: 10, Session: "s1"})
 	if c := exitCode(h.run("check", "3000")); c != 0 {
 		t.Fatalf("own: %d", c)
+	}
+	if !strings.Contains(h.out.String(), "port 3000: own") {
+		t.Fatalf("own check should print one stdout line, got %q", h.out.String())
 	}
 	h.seed(t, registry.Entry{ID: "theirs", Port: 3001, PID: 11, Session: "s2", Worktree: "/wt/b", Label: "x"})
 	err := h.run("check", "3001")
 	if c := exitCode(err); c != 1 || !strings.Contains(err.Error(), "s2") {
 		t.Fatalf("foreign: %d %v", c, err)
+	}
+	// The ExitError is the whole answer; main prints it once, on stderr.
+	if h.out.Len() != 0 {
+		t.Fatalf("non-zero check must not also print to stdout: %q", h.out.String())
+	}
+	// --json always prints the document and carries the code with no message.
+	err = h.run("check", "3001", "--json")
+	var ee *cli.ExitError
+	if !errors.As(err, &ee) || ee.Code != 1 || ee.Msg != "" {
+		t.Fatalf("foreign --json: %#v", err)
+	}
+	var res struct {
+		Status string `json:"status"`
+	}
+	if e := json.Unmarshal(h.out.Bytes(), &res); e != nil || res.Status != "foreign" {
+		t.Fatalf("json: %v %s", e, h.out.String())
 	}
 	h.app.PidOnPort = func(p int) (int, string, bool) { return 999, "node", p == 3002 }
 	h.prober.listening[3002] = true

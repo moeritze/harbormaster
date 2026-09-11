@@ -2,6 +2,7 @@
 package app
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -15,6 +16,11 @@ import (
 	"github.com/moeritze/harbormaster/internal/ports"
 	"github.com/moeritze/harbormaster/internal/registry"
 )
+
+// ErrUsage marks a configuration error the caller can fix in the environment
+// or on the command line. main maps it to the usage exit code instead of the
+// registry one.
+var ErrUsage = errors.New("usage")
 
 // App carries injected dependencies.
 type App struct {
@@ -38,7 +44,7 @@ func New(getenv func(string) string, stdout, stderr io.Writer) (*App, error) {
 	}
 	pc, err := ports.ConfigFromEnv(getenv)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("%w: %v", ErrUsage, err)
 	}
 	hostUser := ""
 	if u, err := user.Current(); err == nil {
