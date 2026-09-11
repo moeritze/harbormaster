@@ -114,3 +114,31 @@ func TestHookClaudeSessionEndClearKeepsServers(t *testing.T) {
 		t.Fatalf("clear must release nothing: %+v", f.Entries)
 	}
 }
+
+func TestHookCursorDeniesForeignKillAndSessionStartExportsEnv(t *testing.T) {
+	h := newHarness(t, "me", "/wt/a")
+	h.seed(t, registry.Entry{ID: "t", Port: 3100, PID: 77, Session: "other", Worktree: "/wt/b", Label: "api"})
+	h.stdin = strings.NewReader(`{"conversation_id":"me","command":"lsof -ti:3100 | xargs kill","cwd":"/wt/a"}`)
+	if err := h.run("hook", "cursor", "beforeShellExecution"); err != nil {
+		t.Fatalf("hook must exit 0: %v", err)
+	}
+	out := h.out.String()
+	if !strings.Contains(out, `"permission":"deny"`) || !strings.Contains(out, "3100") || !strings.Contains(out, `"agent_message"`) {
+		t.Fatalf("%s", out)
+	}
+	h.stdin = strings.NewReader(`{"conversation_id":"me","workspace_roots":["/wt/a"]}`)
+	if err := h.run("hook", "cursor", "sessionStart"); err != nil {
+		t.Fatal(err)
+	}
+	out = h.out.String()
+	if !strings.Contains(out, `"HARBORMASTER_SESSION":"me"`) || !strings.Contains(out, `"additional_context"`) {
+		t.Fatalf("%s", out)
+	}
+	h.stdin = strings.NewReader(`{"conversation_id":"me","command":"npm run dev","cwd":"/wt/a"}`)
+	if err := h.run("hook", "cursor", "beforeShellExecution"); err != nil {
+		t.Fatal(err)
+	}
+	if strings.TrimSpace(h.out.String()) != "" {
+		t.Fatalf("cursor allow must print nothing, got %q", h.out.String())
+	}
+}
