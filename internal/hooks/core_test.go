@@ -21,10 +21,11 @@ func (f *fakeProber) PidAlive(p int) bool      { return f.alive[p] }
 func (f *fakeProber) PortListening(p int) bool { return f.listening[p] }
 
 type h struct {
-	core *hooks.Core
-	st   *registry.Store
-	now  time.Time
-	log  *bytes.Buffer
+	core   *hooks.Core
+	st     *registry.Store
+	now    time.Time
+	log    *bytes.Buffer
+	prober *fakeProber
 }
 
 func newH(t *testing.T) *h {
@@ -44,7 +45,7 @@ func newH(t *testing.T) *h {
 	c := hooks.New(a)
 	c.Log = log
 	c.KillTimeout = 200 * time.Millisecond
-	return &h{core: c, st: st, now: now, log: log}
+	return &h{core: c, st: st, now: now, log: log, prober: pr}
 }
 
 func (x *h) seed(t *testing.T, e registry.Entry) {
@@ -52,6 +53,10 @@ func (x *h) seed(t *testing.T, e registry.Entry) {
 	if e.StartedAt.IsZero() {
 		e.StartedAt = x.now.Add(-5 * time.Minute)
 	}
+	// Keep the pruner out of the way: these tests are about hook decisions,
+	// not liveness.
+	x.prober.alive[e.PID] = true
+	x.prober.listening[e.Port] = true
 	if err := x.st.Update(func(f *registry.File) error { f.Entries = append(f.Entries, e); return nil }); err != nil {
 		t.Fatal(err)
 	}
@@ -59,6 +64,10 @@ func (x *h) seed(t *testing.T, e registry.Entry) {
 
 func ev(kind hooks.Kind, session, cmd string) hooks.Event { //nolint:unparam // brief's fixed test-harness signature; session happens to be "me" in every case in this file but documents which field callers are setting
 	return hooks.Event{Kind: kind, Agent: "claude", Session: session, Cwd: "/wt/x", Command: cmd}
+}
+
+func endEv(session, reason string) hooks.Event { //nolint:unparam // same fixed harness shape as ev: the session is always "me" here, the reason is what varies
+	return hooks.Event{Kind: hooks.SessionEnd, Agent: "claude", Session: session, Cwd: "/wt/x", Reason: reason}
 }
 
 func TestSessionStartContextListsServersAndPort(t *testing.T) {
@@ -110,11 +119,27 @@ func TestPreShellDeniesKillOfForeignPid(t *testing.T) {
 	}
 }
 
-func TestPreShellBlindKillGetsContextNotDeny(t *testing.T) {
+// TestPreShellBlindKillAsks: a kill with no port and no pid in its text may
+// or may not hit somebody else's server. harbormaster cannot tell, so it
+// hands the decision to the human ("ask") instead of allowing it -- and an
+// allow would have been worse than useless here, since an allow that
+// carried a permissionDecision would have skipped the prompt entirely.
+func TestPreShellBlindKillAsks(t *testing.T) {
 	x := newH(t)
 	x.seed(t, registry.Entry{ID: "a", Port: 3100, PID: 41, Agent: "claude", Session: "other", Label: "api"})
 	r := x.core.Handle(ev(hooks.PreShell, "me", "pkill -f node"))
-	if r.Decision != hooks.Allow || !strings.Contains(r.Context, "3100") {
+	if r.Decision != hooks.Ask || !strings.Contains(r.Reason, "3100") || r.Context != "" {
+		t.Fatalf("%+v", r)
+	}
+}
+
+// TestPreShellBlindKillWithNoForeignServersIsSilent guards the other half:
+// nothing to protect means no prompt at all.
+func TestPreShellBlindKillWithNoForeignServersIsSilent(t *testing.T) {
+	x := newH(t)
+	x.seed(t, registry.Entry{ID: "a", Port: 3100, PID: 41, Agent: "claude", Session: "me"})
+	r := x.core.Handle(ev(hooks.PreShell, "me", "pkill -f node"))
+	if r.Decision != hooks.Allow || r.Reason != "" || r.Context != "" {
 		t.Fatalf("%+v", r)
 	}
 }
@@ -167,13 +192,68 @@ func TestSessionEndReleasesOwnEntriesOnly(t *testing.T) {
 	x := newH(t)
 	x.seed(t, registry.Entry{ID: "mine", Port: 3100, PID: 1, Agent: "claude", Session: "me"})
 	x.seed(t, registry.Entry{ID: "theirs", Port: 3101, PID: 1, Agent: "claude", Session: "other"})
-	r := x.core.Handle(ev(hooks.SessionEnd, "me", ""))
+	r := x.core.Handle(endEv("me", "logout"))
 	if r.Decision != hooks.Allow {
 		t.Fatalf("%+v", r)
 	}
 	f, _ := x.st.Peek()
 	if len(f.Entries) != 1 || f.Entries[0].ID != "theirs" {
-		t.Fatalf("%+v", f.Entries)
+		t.Fatalf("foreign entries must be untouched: %+v", f.Entries)
+	}
+	recs, err := x.st.History(20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, rec := range recs {
+		if rec.Port == 3100 {
+			if rec.Reason != "session_end" {
+				t.Fatalf("history reason %q, want session_end", rec.Reason)
+			}
+			found = true
+		}
+		if rec.Port == 3101 {
+			t.Fatalf("foreign entry must not reach history: %+v", rec)
+		}
+	}
+	if !found {
+		t.Fatalf("no history record for the released entry: %+v", recs)
+	}
+}
+
+// TestSessionEndKeepsServersOnClearAndResume: "clear" and "resume" do not
+// end a session, they only swap its transcript. Releasing there killed the
+// servers the very next prompt was about to use.
+func TestSessionEndKeepsServersOnClearAndResume(t *testing.T) {
+	for _, reason := range []string{"clear", "resume"} {
+		x := newH(t)
+		x.seed(t, registry.Entry{ID: "mine", Port: 3100, PID: 1, Agent: "claude", Session: "me"})
+		if r := x.core.Handle(endEv("me", reason)); r.Decision != hooks.Allow {
+			t.Fatalf("%s: %+v", reason, r)
+		}
+		f, _ := x.st.Peek()
+		if len(f.Entries) != 1 {
+			t.Fatalf("%s must release nothing, got %+v", reason, f.Entries)
+		}
+		if recs, _ := x.st.History(20); len(recs) != 0 {
+			t.Fatalf("%s must write no history, got %+v", reason, recs)
+		}
+	}
+}
+
+// TestSessionEndOtherReasonsRelease covers the reasons that really do end a
+// session.
+func TestSessionEndOtherReasonsRelease(t *testing.T) {
+	for _, reason := range []string{"logout", "prompt_input_exit", "other", ""} {
+		x := newH(t)
+		x.seed(t, registry.Entry{ID: "mine", Port: 3100, PID: 1, Agent: "claude", Session: "me"})
+		if r := x.core.Handle(endEv("me", reason)); r.Decision != hooks.Allow {
+			t.Fatalf("%s: %+v", reason, r)
+		}
+		f, _ := x.st.Peek()
+		if len(f.Entries) != 0 {
+			t.Fatalf("%q must release, got %+v", reason, f.Entries)
+		}
 	}
 }
 

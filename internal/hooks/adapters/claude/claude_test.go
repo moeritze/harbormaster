@@ -34,8 +34,26 @@ func TestParseSessionStartAndEnd(t *testing.T) {
 		t.Fatalf("%+v", ev)
 	}
 	ev, ok, _ = claude.Parse("SessionEnd", []byte(`{"session_id":"s1","cwd":"/wt/a","reason":"logout"}`))
-	if !ok || ev.Kind != hooks.SessionEnd {
+	if !ok || ev.Kind != hooks.SessionEnd || ev.Reason != "logout" {
 		t.Fatalf("%+v", ev)
+	}
+}
+
+// TestParseSessionEndReason: the core needs the reason to tell a real end
+// from a /clear or a resume, which keep the same servers running.
+func TestParseSessionEndReason(t *testing.T) {
+	for _, reason := range []string{"clear", "resume", "logout", "prompt_input_exit", "other"} {
+		ev, ok, err := claude.Parse("SessionEnd", []byte(`{"session_id":"s1","reason":"`+reason+`"}`))
+		if err != nil || !ok {
+			t.Fatal(reason, err, ok)
+		}
+		if ev.Reason != reason {
+			t.Fatalf("%q: got %q", reason, ev.Reason)
+		}
+	}
+	ev, _, _ := claude.Parse("SessionEnd", []byte(`{"session_id":"s1"}`))
+	if ev.Reason != "" {
+		t.Fatalf("a payload with no reason must leave it empty: %q", ev.Reason)
 	}
 }
 
@@ -61,9 +79,22 @@ func TestFormatShapes(t *testing.T) {
 	if got := claude.Format("PreToolUse", hooks.Result{Decision: hooks.Allow}); got != nil {
 		t.Fatalf("silent allow must print nothing, got %s", got)
 	}
+	// An allow must never carry a permissionDecision: "allow" would skip
+	// the user's own permission prompt. Omitting the field is "no opinion",
+	// which still delivers additionalContext.
 	out = claude.Format("PreToolUse", hooks.Result{Decision: hooks.Allow, Context: "hint"})
-	if !strings.Contains(string(out), `"permissionDecision":"allow"`) || !strings.Contains(string(out), `"additionalContext":"hint"`) {
+	if strings.Contains(string(out), "permissionDecision") {
+		t.Fatalf("an allow must not auto-approve anything: %s", out)
+	}
+	if !strings.Contains(string(out), `"additionalContext":"hint"`) || !strings.Contains(string(out), `"hookEventName":"PreToolUse"`) {
 		t.Fatalf("%s", out)
+	}
+	out = claude.Format("PreToolUse", hooks.Result{Decision: hooks.Ask, Reason: "who owns 3100?"})
+	if !strings.Contains(string(out), `"permissionDecision":"ask"`) || !strings.Contains(string(out), `"permissionDecisionReason":"who owns 3100?"`) {
+		t.Fatalf("%s", out)
+	}
+	if strings.Contains(string(out), "additionalContext") {
+		t.Fatalf("an ask carries its reason, not context: %s", out)
 	}
 	out = claude.Format("SessionStart", hooks.Result{Decision: hooks.Allow, Context: "ctx"})
 	if !strings.Contains(string(out), `"hookEventName":"SessionStart"`) || !strings.Contains(string(out), `"additionalContext":"ctx"`) {

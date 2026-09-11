@@ -17,6 +17,12 @@ import (
 	"github.com/moeritze/harbormaster/internal/runner"
 )
 
+// defaultKillTimeout is the budget one SessionEnd termination gets. The
+// SessionEnd hook itself is given 3 s by the installed spec, and a session
+// can own more than one server, so a single stubborn process must not eat
+// the whole budget.
+const defaultKillTimeout = 700 * time.Millisecond
+
 // Core makes hook decisions. One Core serves one hook invocation.
 type Core struct {
 	App         *app.App
@@ -27,7 +33,7 @@ type Core struct {
 
 // New builds a Core from the app; Strict comes from HARBORMASTER_STRICT=1.
 func New(a *app.App) *Core {
-	return &Core{App: a, Strict: os.Getenv("HARBORMASTER_STRICT") == "1", KillTimeout: time.Second}
+	return &Core{App: a, Strict: os.Getenv("HARBORMASTER_STRICT") == "1", KillTimeout: defaultKillTimeout}
 }
 
 // Handle never panics and never fails closed: any internal error is
@@ -53,7 +59,7 @@ func (c *Core) Handle(ev Event) (res Result) {
 	case PostShell:
 		r = c.postShell(ev.Command)
 	case SessionEnd:
-		r, err = c.sessionEnd(a)
+		r, err = c.sessionEnd(a, ev.Reason)
 	}
 	if err != nil {
 		c.logf("%s: %v", ev.Kind, err)
@@ -136,8 +142,11 @@ func (c *Core) preShell(a *app.App, cmd string) (Result, error) {
 			}
 		}
 		if len(d.Ports) == 0 && len(d.Pids) == 0 {
+			// A kill with no port and no pid in its text ("pkill -f node")
+			// may or may not hit somebody else's server: harbormaster
+			// cannot tell, so it asks the human instead of deciding.
 			if others := foreignEntries(a, f.Entries); len(others) > 0 {
-				return Result{Decision: Allow, Context: blindKillContext(others, a.Clock())}, nil
+				return Result{Decision: Ask, Reason: blindKillContext(others, a.Clock())}, nil
 			}
 		}
 		return Result{Decision: Allow}, nil
@@ -169,26 +178,47 @@ func (c *Core) postShell(cmd string) Result {
 }
 
 // sessionEnd releases and terminates everything this session registered,
-// within the SessionEnd hook budget (1 s kill timeout).
-func (c *Core) sessionEnd(a *app.App) (Result, error) {
+// within the SessionEnd hook budget. The registry is updated first, in one
+// locked pass, so the entries are gone even if a termination then hangs:
+// Claude Code kills a hook that overruns its timeout, and a half-released
+// registry is worse than a surviving process (which the next prune reaps).
+//
+// "clear" and "resume" are not the end of anything -- the same session keeps
+// running under a new or restored transcript -- so they release nothing.
+func (c *Core) sessionEnd(a *app.App, reason string) (Result, error) {
 	if a.Ident.Session == "" {
 		return Result{Decision: Allow}, nil
 	}
-	f, err := a.Store.Peek()
-	if err != nil {
+	switch reason {
+	case "clear", "resume":
+		return Result{Decision: Allow}, nil
+	}
+	var removed []registry.Entry
+	if err := a.Store.Update(func(f *registry.File) error {
+		kept := make([]registry.Entry, 0, len(f.Entries))
+		for _, e := range f.Entries {
+			if e.Session == a.Ident.Session {
+				removed = append(removed, e)
+				continue
+			}
+			kept = append(kept, e)
+		}
+		f.Entries = kept
+		return nil
+	}); err != nil {
 		return Result{}, err
 	}
-	for _, e := range f.Entries {
-		if e.Session != a.Ident.Session {
+	for _, e := range removed {
+		if err := a.Store.AppendHistory(registry.HistoryRecord{Entry: e, Reason: "session_end", At: a.Clock()}); err != nil {
+			c.logf("session_end: history for port %d: %v", e.Port, err)
+		}
+	}
+	for _, e := range removed {
+		if err := runner.Guard(e.PID, liveness.PidUID); err != nil {
 			continue
 		}
-		if err := runner.Guard(e.PID, liveness.PidUID); err == nil {
-			_ = runner.Terminate(e.PID, e.Spawned, c.KillTimeout)
-		}
-		if _, found, err := a.Store.Remove(e.ID); err != nil {
-			c.logf("session_end: remove %d: %v", e.Port, err)
-		} else if found {
-			_ = a.Store.AppendHistory(registry.HistoryRecord{Entry: e, Reason: "session_end", At: a.Clock()})
+		if err := runner.Terminate(e.PID, e.Spawned, c.KillTimeout); err != nil {
+			c.logf("session_end: terminate pid %d (port %d): %v", e.PID, e.Port, err)
 		}
 	}
 	return Result{Decision: Allow}, nil

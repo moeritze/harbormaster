@@ -24,19 +24,27 @@ type Event struct {
 	Session string // agent session id from the hook payload
 	Cwd     string // working directory from the hook payload
 	Command string // shell command for PreShell/PostShell, else ""
+	// Reason is the agent's own reason for the event, currently only
+	// SessionEnd's: "clear", "resume", "logout", "prompt_input_exit" or
+	// "other". "clear" and "resume" keep the same servers running under a
+	// new transcript, so they must not release anything.
+	Reason string
 }
 
-// Decision is allow or deny; there is no "ask" in v1.
+// Decision is what the adapter should tell the agent.
 type Decision int
 
-// Decision values.
+// Decision values. Allow never skips the agent's own permission prompt: it
+// means "no opinion", optionally with Context attached. Ask forces the
+// prompt with Reason shown; Deny refuses the command outright.
 const (
 	Allow Decision = iota
 	Deny
+	Ask
 )
 
-// Result is the core's answer. Reason is shown to the agent on deny;
-// Context is extra text injected into the agent's context on allow.
+// Result is the core's answer. Reason is shown to the agent on deny and on
+// ask; Context is extra text injected into the agent's context on allow.
 type Result struct {
 	Decision Decision
 	Reason   string

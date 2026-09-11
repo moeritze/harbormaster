@@ -23,6 +23,8 @@ type payload struct {
 	ToolInput struct {
 		Command string `json:"command"`
 	} `json:"tool_input"`
+	// Reason is SessionEnd's: clear|resume|logout|prompt_input_exit|other.
+	Reason string `json:"reason"`
 }
 
 // Parse maps a Claude Code payload to an Event. ok=false means the event
@@ -38,6 +40,7 @@ func Parse(event string, stdin []byte) (hooks.Event, bool, error) {
 		ev.Kind = hooks.SessionStart
 	case "SessionEnd":
 		ev.Kind = hooks.SessionEnd
+		ev.Reason = p.Reason
 	case "PreToolUse", "PostToolUse":
 		if p.ToolName != "Bash" {
 			return hooks.Event{}, false, nil
@@ -66,6 +69,12 @@ type output struct {
 }
 
 // Format renders the stdout Claude Code expects. nil means print nothing.
+//
+// On PreToolUse a permissionDecision of "allow" *skips* the user's own
+// permission prompt, so harbormaster never emits one: an allow with context
+// omits permissionDecision entirely ("no opinion" — normal permission flow),
+// which still delivers additionalContext. Only Deny ("deny") and Ask
+// ("ask", which forces the prompt with the reason shown) set the field.
 func Format(event string, r hooks.Result) []byte {
 	o := hookSpecificOutput{HookEventName: event}
 	switch event {
@@ -75,14 +84,17 @@ func Format(event string, r hooks.Result) []byte {
 		}
 		o.AdditionalContext = r.Context
 	case "PreToolUse":
-		if r.Decision == hooks.Deny {
+		switch r.Decision {
+		case hooks.Deny:
 			o.PermissionDecision = "deny"
 			o.PermissionDecisionReason = r.Reason
-		} else {
+		case hooks.Ask:
+			o.PermissionDecision = "ask"
+			o.PermissionDecisionReason = r.Reason
+		case hooks.Allow:
 			if r.Context == "" {
 				return nil
 			}
-			o.PermissionDecision = "allow"
 			o.AdditionalContext = r.Context
 		}
 	default:
