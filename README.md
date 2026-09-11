@@ -1,5 +1,9 @@
 # harbormaster
 
+[![ci](https://github.com/moeritze/harbormaster/actions/workflows/ci.yml/badge.svg)](https://github.com/moeritze/harbormaster/actions/workflows/ci.yml)
+[![codeql](https://github.com/moeritze/harbormaster/actions/workflows/codeql.yml/badge.svg)](https://github.com/moeritze/harbormaster/actions/workflows/codeql.yml)
+[![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/moeritze/harbormaster/badge)](https://scorecard.dev/viewer/?uri=github.com/moeritze/harbormaster)
+
 Registry of local dev servers for multi-session, multi-worktree development.
 Knows which port belongs to which worktree, which agent session started it,
 and for what task. Agents stop killing each other's servers.
