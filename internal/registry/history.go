@@ -41,14 +41,13 @@ func (s *Store) appendHistoryLocked(rec HistoryRecord) error {
 	if len(lines) > historyCap {
 		lines = lines[len(lines)-historyCap:]
 	}
-	tmp := s.path(historyName + ".tmp")
-	if err := os.WriteFile(tmp, []byte(strings.Join(lines, "\n")+"\n"), 0o600); err != nil {
-		return err
-	}
-	return os.Rename(tmp, s.path(historyName))
+	return s.atomicWrite(historyName, "history-*.tmp", []byte(strings.Join(lines, "\n")+"\n"))
 }
 
 func (s *Store) readHistoryLines() ([]string, error) {
+	if err := checkNotSymlink(s.path(historyName)); err != nil {
+		return nil, err
+	}
 	fh, err := os.Open(s.path(historyName))
 	if errors.Is(err, os.ErrNotExist) {
 		return nil, nil

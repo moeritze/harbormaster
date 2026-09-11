@@ -60,10 +60,12 @@ type Store struct {
 	now    func() time.Time
 }
 
-// Open creates dir with mode 0700 if it does not exist yet and returns a
-// Store. An existing directory is left exactly as the user set it up: every
-// command would otherwise silently re-chmod a directory the user may have
-// shared on purpose (a group-readable state dir, a symlinked home).
+// Open creates dir with mode 0700 if it does not exist yet, validates it,
+// and returns a Store. An existing directory is left exactly as the user set
+// it up: every command would otherwise silently re-chmod a directory the
+// user may have shared on purpose (a group-readable state dir). It is
+// validated rather than repaired, so a directory harbormaster cannot vouch
+// for is refused instead of quietly used.
 func Open(dir string, p Prober, now func() time.Time) (*Store, error) {
 	if _, err := os.Stat(dir); err != nil {
 		if !errors.Is(err, os.ErrNotExist) {
@@ -73,10 +75,49 @@ func Open(dir string, p Prober, now func() time.Time) (*Store, error) {
 			return nil, fmt.Errorf("create state dir: %w", err)
 		}
 	}
+	if err := validateStateDir(dir); err != nil {
+		return nil, err
+	}
 	if now == nil {
 		now = func() time.Time { return time.Now().UTC() }
 	}
 	return &Store{dir: dir, prober: p, now: now}, nil
+}
+
+// validateStateDir refuses a state directory harbormaster cannot trust: a
+// symlink (whoever controls the link controls where state lands), one that
+// group or other can write (they could swap registry.json for a symlink or
+// plant files), or one owned by a different user.
+func validateStateDir(dir string) error {
+	fi, err := os.Lstat(dir)
+	if err != nil {
+		return fmt.Errorf("state dir: %w", err)
+	}
+	if fi.Mode()&os.ModeSymlink != 0 {
+		return fmt.Errorf("state dir %s is a symlink; refusing to operate", dir)
+	}
+	if mode := fi.Mode().Perm(); mode&0o022 != 0 {
+		return fmt.Errorf("state dir %s is group/other-writable (%o); fix with chmod 700", dir, mode)
+	}
+	return checkOwner(dir, fi)
+}
+
+// checkNotSymlink refuses to read or write a state file that has been
+// replaced by a symlink. os.ReadFile and os.WriteFile both follow one, so a
+// planted link would redirect harbormaster's reads and writes to a file of
+// the planter's choosing.
+func checkNotSymlink(path string) error {
+	fi, err := os.Lstat(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("stat %s: %w", path, err)
+	}
+	if fi.Mode()&os.ModeSymlink != 0 {
+		return fmt.Errorf("registry file %s is a symlink; refusing to operate", path)
+	}
+	return nil
 }
 
 // Dir returns the state directory.
@@ -205,6 +246,9 @@ func (s *Store) commit(f *File, pruned []HistoryRecord) error {
 }
 
 func (s *Store) read() (*File, error) {
+	if err := checkNotSymlink(s.path(fileName)); err != nil {
+		return nil, err
+	}
 	b, err := os.ReadFile(s.path(fileName))
 	if errors.Is(err, os.ErrNotExist) {
 		return &File{Version: SchemaVersion, Entries: []Entry{}}, nil
@@ -230,13 +274,45 @@ func (s *Store) write(f *File) error {
 	if err != nil {
 		return err
 	}
-	tmp := s.path(fileName + ".tmp")
-	if err := os.WriteFile(tmp, append(b, '\n'), 0o600); err != nil {
-		return fmt.Errorf("write registry: %w", err)
+	return s.atomicWrite(fileName, "registry-*.tmp", append(b, '\n'))
+}
+
+// atomicWrite writes data to a fresh temp file in s.dir and renames it over
+// name. os.CreateTemp picks a random name and opens it with O_EXCL, so --
+// unlike the fixed "<name>.tmp" path this replaced -- there is no predictable
+// path an attacker can pre-plant a symlink at for the write to follow. The
+// temp file is removed on every failure path so a broken write leaves no
+// litter behind.
+func (s *Store) atomicWrite(name, pattern string, data []byte) error {
+	if err := checkNotSymlink(s.path(name)); err != nil {
+		return err
 	}
-	if err := os.Rename(tmp, s.path(fileName)); err != nil {
-		_ = os.Remove(tmp)
-		return fmt.Errorf("commit registry: %w", err)
+	tmp, err := os.CreateTemp(s.dir, pattern)
+	if err != nil {
+		return fmt.Errorf("write %s: %w", name, err)
+	}
+	tmpName := tmp.Name()
+	fail := func(what string, err error) error {
+		_ = tmp.Close()
+		_ = os.Remove(tmpName)
+		return fmt.Errorf("%s %s: %w", what, name, err)
+	}
+	if err := tmp.Chmod(0o600); err != nil {
+		return fail("write", err)
+	}
+	if _, err := tmp.Write(data); err != nil {
+		return fail("write", err)
+	}
+	if err := tmp.Sync(); err != nil {
+		return fail("write", err)
+	}
+	if err := tmp.Close(); err != nil {
+		_ = os.Remove(tmpName)
+		return fmt.Errorf("write %s: %w", name, err)
+	}
+	if err := os.Rename(tmpName, s.path(name)); err != nil {
+		_ = os.Remove(tmpName)
+		return fmt.Errorf("commit %s: %w", name, err)
 	}
 	return nil
 }
