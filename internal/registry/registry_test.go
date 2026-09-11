@@ -69,6 +69,48 @@ func TestUpdatePersistsAndFileMode0600(t *testing.T) {
 	}
 }
 
+func TestLoadDoesNotRewriteWhenNothingPruned(t *testing.T) {
+	s := open(t)
+	if err := s.Update(func(f *registry.File) error {
+		f.Entries = append(f.Entries, registry.Entry{ID: "a", Port: 3000, PID: 1, StartedAt: fixedNow()})
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	path := filepath.Join(s.Dir(), "registry.json")
+	before, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	beforeBytes, err := os.ReadFile(path) //nolint:gosec // path is s.Dir()/registry.json, test-controlled
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := s.Load(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Load(); err != nil {
+		t.Fatal(err)
+	}
+
+	after, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	afterBytes, err := os.ReadFile(path) //nolint:gosec // path is s.Dir()/registry.json, test-controlled
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !before.ModTime().Equal(after.ModTime()) {
+		t.Fatalf("registry.json was rewritten: mtime %v -> %v", before.ModTime(), after.ModTime())
+	}
+	if string(beforeBytes) != string(afterBytes) {
+		t.Fatal("registry.json bytes changed on Load with nothing pruned")
+	}
+}
+
 func TestConcurrentUpdatesUnderLockProduceValidFile(t *testing.T) {
 	s := open(t)
 	var wg sync.WaitGroup

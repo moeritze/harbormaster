@@ -75,16 +75,26 @@ func (s *Store) Dir() string { return s.dir }
 
 func (s *Store) path(name string) string { return filepath.Join(s.dir, name) }
 
-// Load reads, prunes, and (if anything was pruned) writes back.
+// Load reads, prunes, and (only if anything was pruned) writes back.
 func (s *Store) Load() (*File, error) {
-	var out *File
-	err := s.Update(func(f *File) error {
-		cp := *f
-		cp.Entries = append([]Entry(nil), f.Entries...)
-		out = &cp
-		return nil
-	})
-	return out, err
+	unlock, err := lock(s.path(lockName), lockTimeout)
+	if err != nil {
+		return nil, err
+	}
+	defer unlock()
+
+	f, dirty, err := s.readPruned()
+	if err != nil {
+		return nil, err
+	}
+	if dirty {
+		if err := s.write(f); err != nil {
+			return nil, err
+		}
+	}
+	cp := *f
+	cp.Entries = append([]Entry(nil), f.Entries...)
+	return &cp, nil
 }
 
 // Update runs fn on the pruned document under the lock and writes the result atomically.
@@ -95,20 +105,32 @@ func (s *Store) Update(fn func(f *File) error) error {
 	}
 	defer unlock()
 
-	f, err := s.read()
+	f, _, err := s.readPruned()
 	if err != nil {
 		return err
 	}
-	pruned := s.prune(f)
 	if err := fn(f); err != nil {
 		return err
 	}
+	return s.write(f)
+}
+
+// readPruned reads the document and prunes it, recording any pruned entries
+// to history. Must be called with the lock held. The bool result reports
+// whether anything was pruned (i.e. whether the caller's in-memory copy now
+// differs from what's on disk).
+func (s *Store) readPruned() (*File, bool, error) {
+	f, err := s.read()
+	if err != nil {
+		return nil, false, err
+	}
+	pruned := s.prune(f)
 	for _, rec := range pruned {
 		if err := s.appendHistoryLocked(rec); err != nil {
-			return err
+			return nil, false, err
 		}
 	}
-	return s.write(f)
+	return f, len(pruned) > 0, nil
 }
 
 func (s *Store) read() (*File, error) {
