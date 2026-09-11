@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -32,8 +33,8 @@ func newRun(a *app.App) *cobra.Command {
 			reg := func(p, pid int, cmdLine, lbl string) (registry.Entry, error) {
 				e := newEntry(a, p, pid, cmdLine, lbl)
 				err := a.Store.Update(func(f *registry.File) error {
-					if x, ok := findByPort(f, p); ok && !ident.Owns(a.Ident, x, a.Git.Worktree) {
-						return exitf(ExitDenied, "port %d owned by %s", p, ownerLine(x, a.Clock()))
+					if err := denyIfRegistered(a, f, p); err != nil {
+						return err
 					}
 					f.Entries = append(f.Entries, e)
 					return nil
@@ -45,13 +46,7 @@ func newRun(a *app.App) *cobra.Command {
 				Port: resolved, Label: label, EnvNames: envNames, Args: args,
 				ListenTimeout: registry.ListenGrace, KillTimeout: 10 * time.Second,
 			}, reg)
-			if err != nil {
-				return exitf(code, "%v", err)
-			}
-			if code != 0 {
-				return &ExitError{Code: code, Msg: fmt.Sprintf("%s exited with %d", args[0], code)}
-			}
-			return nil
+			return runResultToErr(code, err, args[0])
 		},
 	}
 	cmd.Flags().IntVar(&port, "port", 0, "port to use (default: $PORT, then this worktree's deterministic port)")
@@ -61,7 +56,10 @@ func newRun(a *app.App) *cobra.Command {
 	return cmd
 }
 
-// resolveRunPort applies spec §6.1 steps 1-2.
+// resolveRunPort applies spec §6.1 steps 1-2. Whether the port came from
+// --port, $PORT, or this worktree's deterministic default, it is always run
+// through checkPort so an already-running own entry on that port is refused
+// rather than silently double-registered (Finding 1).
 func resolveRunPort(a *app.App, flag int) (int, error) {
 	if flag == 0 {
 		if v := getenv("PORT"); v != "" {
@@ -77,15 +75,59 @@ func resolveRunPort(a *app.App, flag int) (int, error) {
 		if err != nil {
 			return 0, exitf(ExitRegistry, "%v", err)
 		}
-		return p, nil
+		flag = p
 	}
 	res, code := checkPort(a, flag)
-	switch code {
-	case ExitOK:
+	switch {
+	case code == ExitOK && res.Status == "own":
+		return 0, alreadyRunningErr(flag, res.PID)
+	case code == ExitOK:
 		return flag, nil
-	case ExitDenied:
+	case code == ExitDenied:
 		return 0, exitf(ExitDenied, "port %d owned by %s. Run `harbormaster port` for this worktree's port.", flag, res.Owner)
 	default:
 		return 0, exitf(code, "port %d is held by %s", flag, res.Owner)
 	}
+}
+
+// alreadyRunningErr reports that port is already registered to this
+// session. Finding 1 (ruling): `run` must refuse ANY existing entry on the
+// target port, own included, rather than appending a second row for the
+// same server.
+func alreadyRunningErr(port, pid int) error {
+	return exitf(ExitDenied, "port %d already registered by this session (pid %d); run `harbormaster kill %d` first", port, pid, port)
+}
+
+// denyIfRegistered is the authoritative check applied under the registry
+// lock at register time: even if resolveRunPort saw the port as free, a
+// concurrent `run` may have registered it in the meantime. Own entries are
+// refused just like foreign ones (Finding 1).
+func denyIfRegistered(a *app.App, f *registry.File, port int) error {
+	x, ok := findByPort(f, port)
+	if !ok {
+		return nil
+	}
+	if ident.Owns(a.Ident, x, a.Git.Worktree) {
+		return alreadyRunningErr(port, x.PID)
+	}
+	return exitf(ExitDenied, "port %d owned by %s", port, ownerLine(x, a.Clock()))
+}
+
+// runResultToErr converts runner.Run's (code, err) into the command's
+// returned error. An error from register (e.g. denyIfRegistered) arrives
+// wrapped by runner.Run as a generic exit-4 registry failure; unwrapping to
+// the embedded *ExitError preserves its real exit code and message
+// (Finding 2) instead of masking it as ExitRegistry.
+func runResultToErr(code int, err error, cmdName string) error {
+	if err != nil {
+		var ee *ExitError
+		if errors.As(err, &ee) {
+			return ee
+		}
+		return exitf(code, "%v", err)
+	}
+	if code != 0 {
+		return &ExitError{Code: code, Msg: fmt.Sprintf("%s exited with %d", cmdName, code)}
+	}
+	return nil
 }
