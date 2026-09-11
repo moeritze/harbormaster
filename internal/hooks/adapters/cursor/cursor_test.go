@@ -77,8 +77,15 @@ func TestFormatShapes(t *testing.T) {
 		t.Fatalf("silent allow must print nothing, got %s", got)
 	}
 	m = decode(t, cursor.FormatSession("sessionStart", "c1", hooks.Result{Decision: hooks.Allow, Context: "table"}))
-	if m["additional_context"] != "table" {
+	ctx, _ := m["additional_context"].(string)
+	if !strings.HasPrefix(ctx, "table\n") {
 		t.Fatalf("%v", m)
+	}
+	// Cursor's sessionStart env reaches later hook executions only, never
+	// the agent's shell, so the context has to spell out the command that
+	// does attribute a server to this conversation.
+	if !strings.Contains(ctx, `HARBORMASTER_SESSION=c1 harbormaster run --label "<task>" -- <command>`) {
+		t.Fatalf("missing the attribution line: %q", ctx)
 	}
 	env := m["env"].(map[string]any)
 	if env["HARBORMASTER_AGENT"] != "cursor" || env["HARBORMASTER_SESSION"] != "c1" {
@@ -92,5 +99,20 @@ func TestFormatShapes(t *testing.T) {
 	}
 	if got := cursor.Format("sessionEnd", hooks.Result{Decision: hooks.Allow}); got != nil {
 		t.Fatalf("sessionEnd is fire and forget, got %s", got)
+	}
+}
+
+// TestFormatCapsMessages: the reason is built from registry rows, so a
+// machine with many registered servers could push kilobytes into a Cursor
+// permission prompt.
+func TestFormatCapsMessages(t *testing.T) {
+	long := strings.Repeat("ü", 4000) // 8000 bytes
+	m := decode(t, cursor.Format("beforeShellExecution", hooks.Result{Decision: hooks.Deny, Reason: long}))
+	msg := m["agent_message"].(string)
+	if len(msg) > hooks.MaxMessage || !strings.HasSuffix(msg, "…") {
+		t.Fatalf("agent_message not capped: %d bytes", len(msg))
+	}
+	if len(m["user_message"].(string)) > hooks.MaxMessage {
+		t.Fatal("user_message not capped")
 	}
 }

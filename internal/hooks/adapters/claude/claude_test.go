@@ -108,3 +108,18 @@ func TestFormatShapes(t *testing.T) {
 		t.Fatalf("%s", out)
 	}
 }
+
+// TestFormatCapsReason: same cap as the Cursor adapter — a reason built
+// from a large registry must not become a multi-kilobyte permission prompt.
+func TestFormatCapsReason(t *testing.T) {
+	long := strings.Repeat("ü", 4000) // 8000 bytes
+	out := claude.Format("PreToolUse", hooks.Result{Decision: hooks.Deny, Reason: long})
+	var m map[string]map[string]any
+	if err := json.Unmarshal(out, &m); err != nil {
+		t.Fatal(err)
+	}
+	reason := m["hookSpecificOutput"]["permissionDecisionReason"].(string)
+	if len(reason) > hooks.MaxMessage || !strings.HasSuffix(reason, "…") {
+		t.Fatalf("reason not capped: %d bytes", len(reason))
+	}
+}

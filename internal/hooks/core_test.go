@@ -3,10 +3,12 @@ package hooks_test
 import (
 	"bytes"
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/moeritze/harbormaster/internal/app"
 	"github.com/moeritze/harbormaster/internal/gitctx"
@@ -352,5 +354,133 @@ func TestSessionContextCapsTheTable(t *testing.T) {
 	}
 	if strings.Contains(r.Context, "3134") {
 		t.Fatalf("row past the cap was rendered:\n%s", r.Context)
+	}
+}
+
+// cursorEv builds a Cursor hook event. Cursor's identity is the
+// conversation id, so the session field is the same shape as Claude's.
+func cursorEv(kind hooks.Kind, session, cwd, cmd string) hooks.Event {
+	return hooks.Event{Kind: kind, Agent: "cursor", Session: session, Cwd: cwd, Command: cmd}
+}
+
+// TestCursorSessionEndReleasesButNeverTerminates covers the whole Cursor
+// reason set. Cursor's sessionEnd fires once per conversation — "completed"
+// is the ordinary end of a piece of work, and the per-turn event is `stop`,
+// which harbormaster does not hook — so ending a conversation must never
+// stop a dev server the user is still looking at.
+func TestCursorSessionEndReleasesButNeverTerminates(t *testing.T) {
+	for _, reason := range []string{"completed", "aborted", "error", "window_close", "user_close", ""} {
+		x := newH(t)
+		killed := 0
+		x.core.Terminate = func(int, bool, time.Duration) error { killed++; return nil }
+		x.seed(t, registry.Entry{ID: "mine", Port: 3100, PID: 4242, Agent: "cursor", Session: "c1", Worktree: "/wt/x"})
+		if r := x.core.Handle(hooks.Event{Kind: hooks.SessionEnd, Agent: "cursor", Session: "c1", Cwd: "/wt/x", Reason: reason}); r.Decision != hooks.Allow {
+			t.Fatalf("%q: %+v", reason, r)
+		}
+		f, _ := x.st.Peek()
+		if len(f.Entries) != 0 {
+			t.Fatalf("%q must release the entry, got %+v", reason, f.Entries)
+		}
+		recs, err := x.st.History(20)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(recs) != 1 || recs[0].Reason != "session_end" {
+			t.Fatalf("%q: history %+v", reason, recs)
+		}
+		if killed != 0 {
+			t.Fatalf("%q: Cursor session end must not terminate anything (called %d times)", reason, killed)
+		}
+	}
+}
+
+// TestClaudeSessionEndStillTerminates is the other half: the injected
+// Terminate is really the one the core calls, so the Cursor test above
+// proves an absence and not a broken wiring.
+func TestClaudeSessionEndStillTerminates(t *testing.T) {
+	x := newH(t)
+	var got []int
+	x.core.Terminate = func(pid int, _ bool, _ time.Duration) error { got = append(got, pid); return nil }
+	// A pid Guard accepts: alive, ours, and not this process itself.
+	pid := os.Getppid()
+	x.seed(t, registry.Entry{ID: "mine", Port: 3100, PID: pid, Agent: "claude", Session: "me"})
+	x.core.Handle(endEv("me", "logout"))
+	if len(got) != 1 || got[0] != pid {
+		t.Fatalf("claude session end must terminate its own entries, got %v (log: %s)", got, x.log.String())
+	}
+}
+
+// TestCursorOwnsHumanEntriesInTheSameWorktree covers the identity gap:
+// Cursor's sessionStart env never reaches the agent's shell, so a server the
+// Cursor agent starts with a plain `npm run dev` is registered as a human
+// shell session. The conversation must still be allowed to manage it — but
+// only in its own worktree, and never somebody else's agent session.
+func TestCursorOwnsHumanEntriesInTheSameWorktree(t *testing.T) {
+	cases := []struct {
+		name    string
+		entry   registry.Entry
+		myTree  string
+		wantDec hooks.Decision
+	}{
+		{"same worktree", registry.Entry{ID: "h", Port: 3100, PID: 41, Agent: "human", Session: "shell:4242", Worktree: "/wt/x"}, "/wt/x", hooks.Allow},
+		{"other worktree", registry.Entry{ID: "h", Port: 3100, PID: 41, Agent: "human", Session: "shell:4242", Worktree: "/wt/y"}, "/wt/x", hooks.Deny},
+		{"foreign agent, same worktree", registry.Entry{ID: "a", Port: 3100, PID: 41, Agent: "claude", Session: "other", Worktree: "/wt/x"}, "/wt/x", hooks.Deny},
+		{"human entry with no worktree", registry.Entry{ID: "h", Port: 3100, PID: 41, Agent: "human", Session: "shell:4242"}, "/wt/x", hooks.Deny},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			x := newH(t)
+			x.core.GitDiscover = func(string) gitctx.Context { return gitctx.Context{Repo: "/r", Worktree: tc.myTree, Branch: "b"} }
+			x.seed(t, tc.entry)
+			r := x.core.Handle(cursorEv(hooks.PreShell, "c1", tc.myTree, "lsof -ti:3100 | xargs kill"))
+			if r.Decision != tc.wantDec {
+				t.Fatalf("got %v want %v (%q)", r.Decision, tc.wantDec, r.Reason)
+			}
+		})
+	}
+}
+
+// TestClaudeDoesNotInheritTheCursorWorktreeRule: the relaxation is Cursor's
+// alone; Claude Code's own env does carry the session id, so a human entry
+// in the same worktree stays foreign there.
+func TestClaudeDoesNotInheritTheCursorWorktreeRule(t *testing.T) {
+	x := newH(t)
+	x.core.GitDiscover = func(string) gitctx.Context { return gitctx.Context{Worktree: "/wt/x"} }
+	x.seed(t, registry.Entry{ID: "h", Port: 3100, PID: 41, Agent: "human", Session: "shell:4242", Worktree: "/wt/x"})
+	if r := x.core.Handle(ev(hooks.PreShell, "me", "lsof -ti:3100 | xargs kill")); r.Decision != hooks.Deny {
+		t.Fatalf("%+v", r)
+	}
+}
+
+// TestOverrideHintIsAgentAware: pointing a Cursor user at "set
+// HARBORMASTER_HOOKS=0 in Claude Code's environment" is advice they cannot
+// follow.
+func TestOverrideHintIsAgentAware(t *testing.T) {
+	const claudeHint = " (override: set HARBORMASTER_HOOKS=0 in Claude Code's environment)"
+	const cursorHint = " (override: remove the harbormaster entries from ~/.cursor/hooks.json or launch Cursor with HARBORMASTER_HOOKS=0)"
+	x := newH(t)
+	x.seed(t, registry.Entry{ID: "a", Port: 3100, PID: 41, Agent: "claude", Session: "other", Worktree: "/wt/y", Label: "api"})
+	r := x.core.Handle(ev(hooks.PreShell, "me", "lsof -ti:3100 | xargs kill"))
+	if r.Decision != hooks.Deny || !strings.HasSuffix(r.Reason, claudeHint) {
+		t.Fatalf("claude: %+v", r)
+	}
+	r = x.core.Handle(cursorEv(hooks.PreShell, "c1", "/wt/x", "lsof -ti:3100 | xargs kill"))
+	if r.Decision != hooks.Deny || !strings.HasSuffix(r.Reason, cursorHint) {
+		t.Fatalf("cursor: %+v", r)
+	}
+	r = x.core.Handle(cursorEv(hooks.PreShell, "c1", "/wt/x", "pkill -f node"))
+	if r.Decision != hooks.Ask || !strings.HasSuffix(r.Reason, cursorHint) {
+		t.Fatalf("cursor ask: %+v", r)
+	}
+}
+
+func TestClipCapsOnARuneBoundary(t *testing.T) {
+	if got := hooks.Clip("abc", 10); got != "abc" {
+		t.Fatalf("%q", got)
+	}
+	long := strings.Repeat("ü", 4000) // 8000 bytes
+	got := hooks.Clip(long, hooks.MaxMessage)
+	if len(got) > hooks.MaxMessage || !strings.HasSuffix(got, "…") || !utf8.ValidString(got) {
+		t.Fatalf("len %d valid %v: %q…", len(got), utf8.ValidString(got), got[:20])
 	}
 }
