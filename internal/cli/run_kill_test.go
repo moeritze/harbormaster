@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/moeritze/harbormaster/internal/ports"
 	"github.com/moeritze/harbormaster/internal/registry"
 )
 
@@ -122,6 +123,13 @@ func TestResolveRunPortUsesPortEnv(t *testing.T) {
 	if err := h.run("run", "--", "sh", "-c", "exit 0"); err != nil {
 		t.Fatalf("run: %v", err)
 	}
+	hist, _ := h.app.Store.History(0)
+	if len(hist) != 1 || hist[0].Port != 4321 || hist[0].Reason != "exited" {
+		t.Fatalf("expected the run to register port 4321 and log exited: %+v", hist)
+	}
+	if !strings.Contains(h.out.String(), "using $PORT=4321") {
+		t.Fatalf("expected a warning that $PORT overrides the worktree port: %q", h.out.String())
+	}
 }
 
 // TestRunUsesDeterministicPortByDefault covers resolveRunPort's fallback to
@@ -130,6 +138,11 @@ func TestRunUsesDeterministicPortByDefault(t *testing.T) {
 	h := newHarness(t, "s1", "/wt/a")
 	if err := h.run("run", "--", "sh", "-c", "exit 0"); err != nil {
 		t.Fatalf("run: %v", err)
+	}
+	want := ports.Deterministic("/wt/a", h.app.Ports)
+	hist, _ := h.app.Store.History(0)
+	if len(hist) != 1 || hist[0].Port != want {
+		t.Fatalf("expected the run to register the deterministic port %d: %+v", want, hist)
 	}
 }
 

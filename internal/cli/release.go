@@ -57,7 +57,7 @@ func newRelease(a *app.App) *cobra.Command {
 					mine := ident.Owns(a.Ident, e, a.Git.Worktree) ||
 						(session != "" && session == a.Ident.Session)
 					if !force && !mine {
-						return exitf(ExitDenied, "port %d owned by %s. Use --force to release anyway.", e.Port, ownerLine(e, a.Clock()))
+						return exitf(ExitDenied, "port %d owned by %s. Use --force to override ownership.", e.Port, ownerLine(e, a.Clock()))
 					}
 					removed = append(removed, e)
 				}

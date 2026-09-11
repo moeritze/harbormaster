@@ -75,6 +75,9 @@ func TestClassify(t *testing.T) {
 		// wrapped
 		{"hm run --label x -- npm run dev", detect.ServerStart, nil, nil, true},
 		{"hm run -- npm run dev", detect.ServerStart, nil, nil, true},
+		{"hm run -- kill 1234", detect.Kill, nil, []int{1234}, true},
+		{"hm run --label x -- npm run dev", detect.ServerStart, nil, nil, true},
+		{"hm run npm run dev", detect.ServerStart, nil, nil, true},
 		{"harbormaster run -- npm run dev", detect.ServerStart, nil, nil, true},
 		{"harbormaster run --port 3000 -- vite", detect.ServerStart, []int{3000}, nil, true},
 		// none
@@ -115,17 +118,27 @@ func TestClassify(t *testing.T) {
 // latency on every command, so only the first 16 KiB is inspected -- which
 // is still far past where any of these patterns can match.
 func TestClassifyCapsScannedInput(t *testing.T) {
-	cmd := "npm run dev " + strings.Repeat("#", 100*1024)
-	start := time.Now()
+	// A command exactly at the scan cap is the baseline; one six times
+	// larger must cost about the same, because Classify never looks past
+	// the cap. Comparing against a baseline measured in the same process
+	// keeps the assertion meaningful on slow or loaded machines.
+	capped := "npm run dev " + strings.Repeat("#", 16*1024-12)
+	large := "npm run dev " + strings.Repeat("#", 100*1024)
 	const iterations = 20
-	for range iterations {
-		if got := detect.Classify(cmd); got.Class != detect.ServerStart {
-			t.Fatalf("class %v, want server_start", got.Class)
+	avg := func(cmd string) time.Duration {
+		start := time.Now()
+		for range iterations {
+			if got := detect.Classify(cmd); got.Class != detect.ServerStart {
+				t.Fatalf("class %v, want server_start", got.Class)
+			}
 		}
+		return time.Since(start) / iterations
 	}
-	budget := 10 * time.Millisecond * raceBudget
-	if avg := time.Since(start) / iterations; avg > budget {
-		t.Fatalf("Classify averaged %s on a 100 KB command (budget %s); the input cap is not working", avg, budget)
+	base := avg(capped)
+	big := avg(large)
+	slack := 10 * time.Millisecond * raceBudget
+	if big > 2*base+slack {
+		t.Fatalf("Classify on 100 KB averaged %s vs %s at the 16 KB cap; the input cap is not working", big, base)
 	}
 }
 

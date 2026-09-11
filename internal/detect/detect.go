@@ -61,7 +61,13 @@ var (
 	// "hm" would let an unrelated program that happens to be called hm (or
 	// a typo, "hm x lsof -ti:3100 | xargs kill") blank out a real kill and
 	// silently disable the hook for that line.
-	hmClauseRe = regexp.MustCompile(`(?:^|[\s;&|(])(?:harbormaster|hm)\s+(?:ls|kill|check|claim|release|run|port|gc|history|install|uninstall|hook|version)\b[^;&|]*`)
+	hmClauseRe = regexp.MustCompile(`(?:^|[\s;&|(])(?:harbormaster|hm)\s+(?:ls|kill|check|claim|release|port|gc|history|install|uninstall|hook|version)\b[^;&|]*`)
+
+	// hmRunPrefixRe matches only the wrapper part of "hm run [flags] --",
+	// so the wrapped command stays visible: `hm run -- kill 1234` is a kill
+	// and `hm run -- npm run dev` is a (wrapped) server start. A `run`
+	// clause without "--" is blanked whole, like any other subcommand.
+	hmRunPrefixRe = regexp.MustCompile(`(?:^|[\s;&|(])(?:harbormaster|hm)\s+run\b(?:[^;&|]*?\s--(?:\s|$)|[^;&|]*)`)
 
 	// Known blind spots (this package is a heuristic by design, see the
 	// package doc comment): these read command *text*, not where or
@@ -140,9 +146,8 @@ var (
 // original cmd (not this blanked copy) for Wrapped and for port
 // extraction, so e.g. "hm kill 3000 && kill -9 1234" still reports port 3000.
 func blankHmClauses(cmd string) string {
-	return hmClauseRe.ReplaceAllStringFunc(cmd, func(m string) string {
-		return strings.Repeat(" ", len(m))
-	})
+	blank := func(m string) string { return strings.Repeat(" ", len(m)) }
+	return hmClauseRe.ReplaceAllStringFunc(hmRunPrefixRe.ReplaceAllStringFunc(cmd, blank), blank)
 }
 
 // maxScan is how much of a command line Classify looks at. Every pattern

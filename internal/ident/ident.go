@@ -162,14 +162,9 @@ func redactHeaderFlag(a string, maskNext *bool) string {
 	if !strings.HasPrefix(a, "-") {
 		return a
 	}
-	switch {
-	case a == "-H" || a == "--header":
-		*maskNext = true
-		// The next arg is only masked when it is an auth header; plain
-		// headers pass through (see redactArg's authHeader check).
-		*maskNext = false
-		return a
-	case shortSecretFlag.MatchString(a), sensitiveKey.MatchString(a):
+	// -H/--header needs no special state: the header argument itself is
+	// matched by authHeader in redactArg, and plain headers pass through.
+	if shortSecretFlag.MatchString(a) || sensitiveKey.MatchString(a) {
 		*maskNext = true
 	}
 	return a

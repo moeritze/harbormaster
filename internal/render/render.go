@@ -67,7 +67,11 @@ func ShortPath(p string) string {
 	if p == "" {
 		return "-"
 	}
-	return filepath.Base(filepath.Dir(p)) + "/" + filepath.Base(p)
+	parent := filepath.Base(filepath.Dir(p))
+	if parent == "/" || parent == "." || parent == string(filepath.Separator) {
+		return filepath.Base(p)
+	}
+	return parent + "/" + filepath.Base(p)
 }
 
 // OwnerLine renders the actionable owner description used in errors.

@@ -97,6 +97,7 @@ func validateEnvNames(names []string) error {
 // through checkPort so an already-running own entry on that port is refused
 // rather than silently double-registered (Finding 1).
 func resolveRunPort(a *app.App, flag int) (int, error) {
+	fromEnv := false
 	if flag == 0 {
 		if v := getenv("PORT"); v != "" {
 			p, err := parsePort(v)
@@ -104,6 +105,7 @@ func resolveRunPort(a *app.App, flag int) (int, error) {
 				return 0, err
 			}
 			flag = p
+			fromEnv = true
 		}
 	}
 	if flag == 0 {
@@ -112,6 +114,14 @@ func resolveRunPort(a *app.App, flag int) (int, error) {
 			return 0, exitf(ExitRegistry, "%v", err)
 		}
 		flag = p
+	} else if fromEnv {
+		// $PORT is inherited silently and often stale (a previous shell, a
+		// .env loaded for another worktree); say when it overrides this
+		// worktree's own port so a collision is not mistaken for someone
+		// else's fault.
+		if mine, err := a.MyPort(); err == nil && mine != flag {
+			_, _ = fmt.Fprintf(a.Stderr, "harbormaster: using $PORT=%d; this worktree's port is %d (pass --port to silence)\n", flag, mine)
+		}
 	}
 	res, code := checkPort(a, flag)
 	switch {

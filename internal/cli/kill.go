@@ -36,7 +36,7 @@ func newKill(a *app.App) *cobra.Command {
 				return err
 			}
 			if !force && !ident.Owns(a.Ident, e, a.Git.Worktree) {
-				return exitf(ExitDenied, "port %d owned by %s. Use --force only if you are sure.", port, ownerLine(e, a.Clock()))
+				return exitf(ExitDenied, "port %d owned by %s. Use --force to override ownership.", port, ownerLine(e, a.Clock()))
 			}
 			if err := guardEntry(a, e); err != nil {
 				return exitf(ExitDenied, "%v", err)
