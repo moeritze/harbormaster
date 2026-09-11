@@ -19,7 +19,7 @@ func pruneEntries(f *File, p Prober, now time.Time) []HistoryRecord {
 		switch {
 		case !p.PidAlive(e.PID):
 			pruned = append(pruned, HistoryRecord{Entry: e, Reason: "pid_dead", At: now})
-		case now.Sub(e.StartedAt) >= ListenGrace && !p.PortListening(e.Port):
+		case now.Sub(e.StartedAt) >= ListenGrace && portClosed(p, e.Port):
 			pruned = append(pruned, HistoryRecord{Entry: e, Reason: "port_closed", At: now})
 		default:
 			kept = append(kept, e)
@@ -27,4 +27,20 @@ func pruneEntries(f *File, p Prober, now time.Time) []HistoryRecord {
 	}
 	f.Entries = kept
 	return pruned
+}
+
+// reprobeDelay separates the two liveness probes portClosed makes. It is a
+// var so tests can drop it to zero.
+var reprobeDelay = 100 * time.Millisecond
+
+// portClosed reports a port as closed only when two probes reprobeDelay apart
+// both fail. A single failed dial is not enough: a dev server that is
+// restarting, reloading its config, or momentarily refusing connections under
+// load would otherwise have its live entry pruned out from under it.
+func portClosed(p Prober, port int) bool {
+	if p.PortListening(port) {
+		return false
+	}
+	time.Sleep(reprobeDelay)
+	return !p.PortListening(port)
 }
