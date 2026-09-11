@@ -23,13 +23,21 @@ import (
 // the whole budget.
 const defaultKillTimeout = 700 * time.Millisecond
 
+// overrideNote prefixes the context a deny or ask reason becomes once the
+// escape hatch is active.
+const overrideNote = "harbormaster (override active): "
+
 // overrideHint is appended to every deny and ask reason so the agent (and
-// the human reading it) can always find the escape hatch. overrideNote
-// prefixes the context those same reasons become once it is active.
-const (
-	overrideHint = " (override: set HARBORMASTER_HOOKS=0 in Claude Code's environment)"
-	overrideNote = "harbormaster (override active): "
-)
+// the human reading it) can always find the escape hatch. The hatch is not
+// the same in every host: Claude Code passes its own environment to hooks,
+// while Cursor runs them from the editor process, where the practical
+// escapes are editing hooks.json or launching Cursor with the variable set.
+func overrideHint(agent string) string {
+	if agent == "cursor" {
+		return " (override: remove the harbormaster entries from ~/.cursor/hooks.json or launch Cursor with HARBORMASTER_HOOKS=0)"
+	}
+	return " (override: set HARBORMASTER_HOOKS=0 in Claude Code's environment)"
+}
 
 // Core makes hook decisions. One Core serves one hook invocation.
 type Core struct {
@@ -44,6 +52,10 @@ type Core struct {
 	// GitDiscover resolves a directory's git context. It is a field so the
 	// hot path can be proven not to fork git (see scope.git).
 	GitDiscover func(string) gitctx.Context
+	// Terminate stops a released process at session end. It is a field so a
+	// test can prove that a path which must not kill anything never calls
+	// it; nil falls back to runner.Terminate.
+	Terminate func(pid int, group bool, timeout time.Duration) error
 }
 
 // New builds a Core from the app. Strict comes from HARBORMASTER_STRICT=1,
@@ -58,6 +70,7 @@ func NewWithEnv(a *app.App, getenv func(string) string) *Core {
 		Disabled:    getenv("HARBORMASTER_HOOKS") == "0",
 		KillTimeout: defaultKillTimeout,
 		GitDiscover: gitctx.Discover,
+		Terminate:   runner.Terminate,
 	}
 }
 
@@ -90,18 +103,18 @@ func (c *Core) Handle(ev Event) (res Result) {
 		c.logf("%s: %v", ev.Kind, err)
 		return Result{Decision: Allow}
 	}
-	return c.override(r)
+	return c.override(ev.Agent, r)
 }
 
 // override applies the escape hatch and the hint that advertises it.
-func (c *Core) override(r Result) Result {
+func (c *Core) override(agent string, r Result) Result {
 	if r.Decision != Deny && r.Decision != Ask {
 		return r
 	}
 	if c.Disabled {
 		return Result{Decision: Allow, Context: overrideNote + r.Reason}
 	}
-	r.Reason += overrideHint
+	r.Reason += overrideHint(agent)
 	return r
 }
 
@@ -133,9 +146,21 @@ func (s *scope) git() gitctx.Context {
 
 // owns answers ownership without forking git whenever it can: an identity
 // that carries a session id is matched by session alone.
+//
+// Cursor gets one extra rule. Its sessionStart `env` output reaches later
+// hook executions only, never the agent's own shell (cursor.com/docs/hooks,
+// 2026-09-11), so a server the Cursor agent starts with a plain
+// `npm run dev` is registered as agent "human" with a `shell:<pid>` session
+// — harbormaster cannot see that it came from this conversation. Treating a
+// human-owned entry in the same worktree as own keeps the conversation able
+// to manage the servers it just started; entries from any other worktree,
+// and entries owned by another agent session, stay foreign.
 func (s *scope) owns(e registry.Entry) bool {
 	if s.app.Ident.Session != "" {
-		return ident.Owns(s.app.Ident, e, "")
+		if ident.Owns(s.app.Ident, e, "") {
+			return true
+		}
+		return s.app.Ident.Agent == "cursor" && e.Agent == "human" && e.Worktree != "" && e.Worktree == s.git().Worktree
 	}
 	return ident.Owns(s.app.Ident, e, s.git().Worktree)
 }
@@ -257,6 +282,16 @@ func (c *Core) postShell(cmd string) Result {
 //
 // "clear" and "resume" are not the end of anything — the same session keeps
 // running under a new or restored transcript — so they release nothing.
+//
+// Cursor is released but never terminated, whatever the reason. Its
+// sessionEnd fires once per *conversation* with reason ∈ completed |
+// aborted | error | window_close | user_close (cursor.com/docs/hooks,
+// 2026-09-11) — "completed" is the ordinary end of a piece of work, and the
+// per-turn event is `stop`, which harbormaster does not hook. A dev server
+// the user is still looking at must survive the conversation that started
+// it, so Cursor gets the registry cleanup and nothing else; the process is
+// the user's to stop (`harbormaster kill <port>`), or the next prune reaps
+// it once it dies.
 func (c *Core) sessionEnd(s *scope, reason string) (Result, error) {
 	a := s.app
 	if a.Ident.Session == "" {
@@ -286,6 +321,13 @@ func (c *Core) sessionEnd(s *scope, reason string) (Result, error) {
 			c.logf("session_end: history for port %d: %v", e.Port, err)
 		}
 	}
+	if a.Ident.Agent == "cursor" {
+		return Result{Decision: Allow}, nil
+	}
+	terminate := c.Terminate
+	if terminate == nil {
+		terminate = runner.Terminate
+	}
 	for _, e := range removed {
 		if err := runner.Guard(e.PID, liveness.PidUID); err != nil {
 			c.logf("session_end: guard pid %d: %v", e.PID, err)
@@ -295,7 +337,7 @@ func (c *Core) sessionEnd(s *scope, reason string) (Result, error) {
 			c.logf("session_end: pid %d: %v", e.PID, err)
 			continue
 		}
-		if err := runner.Terminate(e.PID, e.Spawned, c.KillTimeout); err != nil {
+		if err := terminate(e.PID, e.Spawned, c.KillTimeout); err != nil {
 			c.logf("session_end: terminate pid %d (port %d): %v", e.PID, e.Port, err)
 		}
 	}

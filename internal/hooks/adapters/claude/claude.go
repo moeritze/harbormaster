@@ -75,6 +75,7 @@ type output struct {
 // omits permissionDecision entirely ("no opinion" — normal permission flow),
 // which still delivers additionalContext. Only Deny ("deny") and Ask
 // ("ask", which forces the prompt with the reason shown) set the field.
+// The reason is capped at hooks.MaxMessage.
 func Format(event string, r hooks.Result) []byte {
 	o := hookSpecificOutput{HookEventName: event}
 	switch event {
@@ -100,6 +101,7 @@ func Format(event string, r hooks.Result) []byte {
 	default:
 		return nil
 	}
+	o.PermissionDecisionReason = hooks.Clip(o.PermissionDecisionReason, hooks.MaxMessage)
 	b, err := json.Marshal(output{o})
 	if err != nil {
 		return nil
