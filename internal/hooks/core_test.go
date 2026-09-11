@@ -298,3 +298,41 @@ func TestPreShellDoesNotDiscoverGitOnTheHotPath(t *testing.T) {
 		t.Fatal("session start must resolve git to report this worktree's port")
 	}
 }
+
+// TestOverrideTurnsDenyAndAskIntoAllow covers HARBORMASTER_HOOKS=0.
+func TestOverrideTurnsDenyAndAskIntoAllow(t *testing.T) {
+	const hint = " (override: set HARBORMASTER_HOOKS=0 in Claude Code's environment)"
+	x := newH(t)
+	x.seed(t, registry.Entry{ID: "a", Port: 3100, PID: 41, Agent: "claude", Session: "other", Label: "api"})
+	r := x.core.Handle(ev(hooks.PreShell, "me", "lsof -ti:3100 | xargs kill"))
+	if r.Decision != hooks.Deny || !strings.HasSuffix(r.Reason, hint) {
+		t.Fatalf("every deny must advertise the override: %+v", r)
+	}
+	r = x.core.Handle(ev(hooks.PreShell, "me", "pkill -f node"))
+	if r.Decision != hooks.Ask || !strings.HasSuffix(r.Reason, hint) {
+		t.Fatalf("every ask must advertise the override: %+v", r)
+	}
+	x.core.Disabled = true
+	r = x.core.Handle(ev(hooks.PreShell, "me", "lsof -ti:3100 | xargs kill"))
+	if r.Decision != hooks.Allow || !strings.HasPrefix(r.Context, "harbormaster (override active): ") || !strings.Contains(r.Context, "3100") {
+		t.Fatalf("override must allow with the reason as context: %+v", r)
+	}
+	if strings.Contains(r.Context, hint) {
+		t.Fatalf("an active override must not still advertise itself: %q", r.Context)
+	}
+	r = x.core.Handle(ev(hooks.PreShell, "me", "pkill -f node"))
+	if r.Decision != hooks.Allow || !strings.HasPrefix(r.Context, "harbormaster (override active): ") {
+		t.Fatalf("ask must degrade too: %+v", r)
+	}
+}
+
+func TestNewReadsOverrideFromTheEnvironment(t *testing.T) {
+	t.Setenv("HARBORMASTER_HOOKS", "0")
+	if c := hooks.New(nil); !c.Disabled {
+		t.Fatal("HARBORMASTER_HOOKS=0 must disable the hooks")
+	}
+	t.Setenv("HARBORMASTER_HOOKS", "")
+	if c := hooks.New(nil); c.Disabled {
+		t.Fatal("hooks must be on by default")
+	}
+}

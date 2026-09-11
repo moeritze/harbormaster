@@ -23,6 +23,14 @@ import (
 // the whole budget.
 const defaultKillTimeout = 700 * time.Millisecond
 
+// overrideHint is appended to every deny and ask reason so the agent (and
+// the human reading it) can always find the escape hatch. overrideNote
+// prefixes the context those same reasons become once it is active.
+const (
+	overrideHint = " (override: set HARBORMASTER_HOOKS=0 in Claude Code's environment)"
+	overrideNote = "harbormaster (override active): "
+)
+
 // Core makes hook decisions. One Core serves one hook invocation.
 type Core struct {
 	App    *app.App
@@ -38,11 +46,13 @@ type Core struct {
 	GitDiscover func(string) gitctx.Context
 }
 
-// New builds a Core from the app; Strict comes from HARBORMASTER_STRICT=1.
+// New builds a Core from the app. Strict comes from HARBORMASTER_STRICT=1,
+// Disabled from HARBORMASTER_HOOKS=0.
 func New(a *app.App) *Core {
 	return &Core{
 		App:         a,
 		Strict:      os.Getenv("HARBORMASTER_STRICT") == "1",
+		Disabled:    os.Getenv("HARBORMASTER_HOOKS") == "0",
 		KillTimeout: defaultKillTimeout,
 		GitDiscover: gitctx.Discover,
 	}
@@ -77,6 +87,18 @@ func (c *Core) Handle(ev Event) (res Result) {
 		c.logf("%s: %v", ev.Kind, err)
 		return Result{Decision: Allow}
 	}
+	return c.override(r)
+}
+
+// override applies the escape hatch and the hint that advertises it.
+func (c *Core) override(r Result) Result {
+	if r.Decision != Deny && r.Decision != Ask {
+		return r
+	}
+	if c.Disabled {
+		return Result{Decision: Allow, Context: overrideNote + r.Reason}
+	}
+	r.Reason += overrideHint
 	return r
 }
 
