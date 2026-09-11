@@ -58,7 +58,11 @@ supervisor, and signal handling in `kill`/`release`.
   running as that user can set `HARBORMASTER_SESSION` to another session's id
   and act as that session, or edit `registry.json` directly. harbormaster
   stops sessions from tripping over each other by accident; it does not
-  contain a hostile process that already runs as you.
+  contain a hostile process that already runs as you. When no agent sets a
+  session id, the fallback session id is derived from the terminal or shell
+  (`TMUX_PANE`, `ITERM_SESSION_ID`, `TERM_SESSION_ID`, or the parent pid) --
+  it identifies a shell, not a secret, and anyone in the same shell or with
+  the same parent pid can reproduce it.
 - **It relies on external tools from `$PATH`**: `ps` (process owner), `lsof`
   (which pid holds a port), and `git` (repo, worktree, branch). If `$PATH` is
   under someone else's control, so are those answers.

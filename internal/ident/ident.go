@@ -3,6 +3,7 @@ package ident
 
 import (
 	"regexp"
+	"strconv"
 	"strings"
 	"unicode"
 	"unicode/utf8"
@@ -17,18 +18,42 @@ type Identity struct {
 	HostUser string
 }
 
-// Detect reads well-known environment variables.
-func Detect(getenv func(string) string, hostUser string) Identity {
+// Detect reads well-known environment variables. ppid is the caller's parent
+// process id, used only for the rule 5 shell fallback (inject os.Getppid()).
+func Detect(getenv func(string) string, hostUser string, ppid int) Identity {
 	id := Identity{Agent: "human", HostUser: hostUser}
 	if a := getenv("HARBORMASTER_AGENT"); a != "" {
 		id.Agent = Sanitize(a)
 		id.Session = Sanitize(getenv("HARBORMASTER_SESSION"))
 		return id
 	}
+	if s := getenv("HARBORMASTER_SESSION"); s != "" {
+		id.Session = Sanitize(s)
+		return id
+	}
+	if s := getenv("CLAUDE_CODE_SESSION_ID"); s != "" {
+		id.Agent = "claude"
+		id.Session = Sanitize(s)
+		return id
+	}
 	if s := getenv("CLAUDE_SESSION_ID"); s != "" {
 		id.Agent = "claude"
 		id.Session = Sanitize(s)
+		return id
 	}
+	// No session id was handed to us: fall back to something stable for this
+	// shell so a human at a terminal (or an unrecognized agent) doesn't need
+	// --force to manage their own servers. This never yields an empty session.
+	fallback := "shell:" + strconv.Itoa(ppid)
+	switch {
+	case getenv("TMUX_PANE") != "":
+		fallback = "tmux:" + getenv("TMUX_PANE")
+	case getenv("ITERM_SESSION_ID") != "":
+		fallback = "iterm:" + getenv("ITERM_SESSION_ID")
+	case getenv("TERM_SESSION_ID") != "":
+		fallback = "term:" + getenv("TERM_SESSION_ID")
+	}
+	id.Session = Sanitize(fallback)
 	return id
 }
 
