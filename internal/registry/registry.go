@@ -97,6 +97,26 @@ func (s *Store) Load() (*File, error) {
 	return &cp, nil
 }
 
+// Prune removes dead entries now and returns what was pruned.
+func (s *Store) Prune() ([]HistoryRecord, error) {
+	unlock, err := lock(s.path(lockName), lockTimeout)
+	if err != nil {
+		return nil, err
+	}
+	defer unlock()
+
+	f, pruned, err := s.readPruned()
+	if err != nil {
+		return nil, err
+	}
+	if len(pruned) > 0 {
+		if err := s.commit(f, pruned); err != nil {
+			return nil, err
+		}
+	}
+	return pruned, nil
+}
+
 // Update runs fn on the pruned document under the lock and writes the result atomically.
 func (s *Store) Update(fn func(f *File) error) error {
 	unlock, err := lock(s.path(lockName), lockTimeout)

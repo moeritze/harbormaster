@@ -220,6 +220,47 @@ func TestHistoryAppendAndCap(t *testing.T) {
 	}
 }
 
+func TestPrunePrunesAndReturnsRecords(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "hm")
+	s, err := registry.Open(dir, deadPID{alive: map[int]bool{1: true}}, fixedNow)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Update(func(f *registry.File) error {
+		f.Entries = append(f.Entries,
+			registry.Entry{ID: "alive", Port: 3000, PID: 1, StartedAt: fixedNow()},
+			registry.Entry{ID: "dead", Port: 3001, PID: 2, StartedAt: fixedNow()},
+		)
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	pruned, err := s.Prune()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(pruned) != 1 || pruned[0].ID != "dead" || pruned[0].Reason != "pid_dead" {
+		t.Fatalf("pruned = %+v", pruned)
+	}
+
+	f, err := s.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(f.Entries) != 1 || f.Entries[0].ID != "alive" {
+		t.Fatalf("entries = %+v", f.Entries)
+	}
+
+	hist, err := s.History(0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(hist) != 1 || hist[0].Reason != "pid_dead" {
+		t.Fatalf("history = %+v", hist)
+	}
+}
+
 func TestLoadRejectsUnknownVersion(t *testing.T) {
 	s := open(t)
 	if err := os.WriteFile(filepath.Join(s.Dir(), "registry.json"), []byte(`{"version":99,"entries":[]}`), 0o600); err != nil {
