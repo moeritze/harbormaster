@@ -285,6 +285,11 @@ func (c *Core) sessionEnd(s *scope, reason string) (Result, error) {
 	}
 	for _, e := range removed {
 		if err := runner.Guard(e.PID, liveness.PidUID); err != nil {
+			c.logf("session_end: guard pid %d: %v", e.PID, err)
+			continue
+		}
+		if err := runner.CheckStartTime(e.PID, e.StartTime, a.PidStartTime); err != nil {
+			c.logf("session_end: pid %d: %v", e.PID, err)
 			continue
 		}
 		if err := runner.Terminate(e.PID, e.Spawned, c.KillTimeout); err != nil {

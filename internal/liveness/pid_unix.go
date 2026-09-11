@@ -33,6 +33,21 @@ func PidUID(pid int) (int, error) {
 	return strconv.Atoi(s)
 }
 
+// PidStartTime returns an opaque, stable description of when pid started
+// (ps's lstart column). Two processes that ever share a pid still differ
+// here, which is what lets a signal be refused after pid reuse.
+func PidStartTime(pid int) (string, error) {
+	out, err := exec.Command("ps", "-o", "lstart=", "-p", strconv.Itoa(pid)).Output()
+	if err != nil {
+		return "", err
+	}
+	s := strings.TrimSpace(string(out))
+	if s == "" {
+		return "", errors.New("no such process")
+	}
+	return s, nil
+}
+
 // PidOnPort finds the listening pid on a TCP port via lsof. ok=false if unknown.
 func PidOnPort(port int) (int, string, bool) {
 	out, err := exec.Command("lsof", "-nP", "-iTCP:"+strconv.Itoa(port), "-sTCP:LISTEN", "-Fpc").Output()

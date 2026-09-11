@@ -38,6 +38,10 @@ type Entry struct {
 	// puts the child in its own process group. Only those may be signaled
 	// as a group; a claimed pid is signaled individually.
 	Spawned bool `json:"spawned,omitempty"`
+	// StartTime is the process start time as reported by the OS when the
+	// entry was written. Before signalling, the live value is compared to
+	// it: a pid that has been reused since belongs to some other process.
+	StartTime string `json:"start_time,omitempty"`
 }
 
 // File is the on-disk document.

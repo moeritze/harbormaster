@@ -35,6 +35,8 @@ type App struct {
 	Ports     ports.Config
 	Cwd       string
 	PidOnPort func(port int) (int, string, bool)
+	// PidStartTime reports when a pid started (see registry.Entry.StartTime).
+	PidStartTime func(pid int) (string, error)
 }
 
 // Options tune how New builds the App.
@@ -78,11 +80,12 @@ func NewWithOptions(getenv func(string) string, stdout, stderr io.Writer, o Opti
 	return &App{
 		Stdout: stdout, Stderr: stderr, Stdin: os.Stdin, Now: now,
 		Store: store, Prober: prober,
-		Ident:     ident.Detect(getenv, hostUser, os.Getppid()),
-		Git:       git,
-		Ports:     pc,
-		Cwd:       cwd,
-		PidOnPort: liveness.PidOnPort,
+		Ident:        ident.Detect(getenv, hostUser, os.Getppid()),
+		Git:          git,
+		Ports:        pc,
+		Cwd:          cwd,
+		PidOnPort:    liveness.PidOnPort,
+		PidStartTime: liveness.PidStartTime,
 	}, nil
 }
 

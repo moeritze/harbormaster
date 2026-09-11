@@ -280,3 +280,39 @@ func TestTerminateKillsProcessGroup(t *testing.T) {
 		t.Fatal("still alive")
 	}
 }
+
+func TestCheckStartTime(t *testing.T) {
+	same := func(int) (string, error) { return "t1", nil }
+	if err := runner.CheckStartTime(5, "t1", same); err != nil {
+		t.Fatalf("matching start time must pass: %v", err)
+	}
+	if err := runner.CheckStartTime(5, "t0", same); err == nil {
+		t.Fatal("different start time must be refused")
+	}
+	if err := runner.CheckStartTime(5, "", same); err != nil {
+		t.Fatal("empty stored value disables the check")
+	}
+	if err := runner.CheckStartTime(5, "t1", nil); err != nil {
+		t.Fatal("nil lookup disables the check")
+	}
+	bad := func(int) (string, error) { return "", errors.New("no ps") }
+	if err := runner.CheckStartTime(5, "t1", bad); err == nil {
+		t.Fatal("lookup failure must refuse (fail closed)")
+	}
+}
+
+// TestTerminateGroupFallsBackForNonLeader: a child that is not a process
+// group leader (no Setpgid) is still terminated when asked as a group.
+func TestTerminateGroupFallsBackForNonLeader(t *testing.T) {
+	cmd := exec.Command("sleep", "30")
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	if err := runner.Terminate(cmd.Process.Pid, true, 2*time.Second); err != nil {
+		t.Fatal(err)
+	}
+	_ = cmd.Wait()
+	if (liveness.OS{}).PidAlive(cmd.Process.Pid) {
+		t.Fatal("still alive")
+	}
+}

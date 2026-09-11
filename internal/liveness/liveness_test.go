@@ -84,3 +84,17 @@ func TestPidOnPortFindsListener(t *testing.T) {
 		t.Fatalf("ok=%v pid=%d want %d", ok, pid, os.Getpid())
 	}
 }
+
+func TestPidStartTimeSelf(t *testing.T) {
+	st, err := liveness.PidStartTime(os.Getpid())
+	if err != nil {
+		t.Skip("PidStartTime unsupported here:", err)
+	}
+	if st == "" {
+		t.Fatal("expected a non-empty start time")
+	}
+	again, _ := liveness.PidStartTime(os.Getpid())
+	if again != st {
+		t.Fatalf("start time must be stable: %q vs %q", st, again)
+	}
+}

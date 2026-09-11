@@ -38,7 +38,7 @@ func newKill(a *app.App) *cobra.Command {
 			if !force && !ident.Owns(a.Ident, e, a.Git.Worktree) {
 				return exitf(ExitDenied, "port %d owned by %s. Use --force only if you are sure.", port, ownerLine(e, a.Clock()))
 			}
-			if err := guardEntry(e); err != nil {
+			if err := guardEntry(a, e); err != nil {
 				return exitf(ExitDenied, "%v", err)
 			}
 			// Remove and record BEFORE signalling. A `run`-supervised child
@@ -87,16 +87,33 @@ func requireSession(a *app.App, force bool) error {
 }
 
 // guardEntry applies the safety guard (spec §10) to an entry about to be
-// signalled: never pid 1, never our own pid, never another user's process.
-func guardEntry(e registry.Entry) error {
-	return runner.Guard(e.PID, liveness.PidUID)
+// signalled: never pid 1, never our own pid, never another user's process,
+// and never a pid that has been reused since the entry was written.
+func guardEntry(a *app.App, e registry.Entry) error {
+	if err := runner.Guard(e.PID, liveness.PidUID); err != nil {
+		return err
+	}
+	return runner.CheckStartTime(e.PID, e.StartTime, a.PidStartTime)
+}
+
+// startTimeOf records the process start time for a new entry; empty when
+// the platform cannot tell, which disables the reuse check for that entry.
+func startTimeOf(a *app.App, pid int) string {
+	if a.PidStartTime == nil {
+		return ""
+	}
+	st, err := a.PidStartTime(pid)
+	if err != nil {
+		return ""
+	}
+	return st
 }
 
 // terminateEntry applies the safety guard, then terminates. Entries created by
 // `run` own a process group and are signaled as one; every other entry (a
 // claimed pid, or a row written by an older build) is signaled individually.
-func terminateEntry(_ *app.App, e registry.Entry) error {
-	if err := guardEntry(e); err != nil {
+func terminateEntry(a *app.App, e registry.Entry) error {
+	if err := guardEntry(a, e); err != nil {
 		return err
 	}
 	return runner.Terminate(e.PID, e.Spawned, 10*time.Second)
