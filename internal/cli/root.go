@@ -3,6 +3,7 @@ package cli
 
 import (
 	"fmt"
+	"os"
 
 	"github.com/spf13/cobra"
 
@@ -11,6 +12,9 @@ import (
 
 // Version is set via -ldflags at build time.
 var Version = "dev"
+
+// getenv is a package-level indirection over os.Getenv so tests can override it.
+var getenv = os.Getenv
 
 // NewRoot builds the root command with all subcommands attached.
 func NewRoot(a *app.App) *cobra.Command {
@@ -30,6 +34,6 @@ func NewRoot(a *app.App) *cobra.Command {
 			return err
 		},
 	})
-	root.AddCommand(newLs(a), newPort(a), newCheck(a), newClaim(a), newRelease(a), newGc(a), newHistory(a))
+	root.AddCommand(newLs(a), newPort(a), newCheck(a), newClaim(a), newRelease(a), newGc(a), newHistory(a), newRun(a), newKill(a))
 	return root
 }
