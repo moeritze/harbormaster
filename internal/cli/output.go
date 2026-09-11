@@ -10,9 +10,33 @@ import (
 	"strings"
 	"text/tabwriter"
 	"time"
+	"unicode/utf8"
 
+	"github.com/moeritze/harbormaster/internal/ident"
 	"github.com/moeritze/harbormaster/internal/registry"
 )
+
+// renderMax is how many bytes of one registry field human output shows.
+const renderMax = 120
+
+// render prepares an untrusted field for a terminal. Registry rows are
+// written by other sessions, and a claimed process's command name comes
+// straight from the OS, so a worktree path or label can carry terminal
+// escapes or run to kilobytes. Sanitize drops the control characters;
+// truncation on a rune boundary keeps one long value from pushing the rest
+// of a row off the screen. --json output is deliberately not rendered:
+// machine consumers get the stored value.
+func render(s string) string {
+	s = ident.Sanitize(s)
+	if len(s) <= renderMax {
+		return s
+	}
+	cut := renderMax
+	for cut > 0 && !utf8.RuneStart(s[cut]) {
+		cut--
+	}
+	return s[:cut] + "…"
+}
 
 // writeJSON encodes v as indented JSON. A nil slice encodes as an empty
 // array ([]) rather than JSON null, since machine consumers of --json
@@ -61,10 +85,10 @@ func ownerLine(e registry.Entry, now time.Time) string {
 	if e.Session != "" {
 		who += " session " + shortSession(e.Session)
 	}
-	where := shortPath(e.Worktree)
+	where := shortPath(render(e.Worktree))
 	label := ""
 	if e.Label != "" {
-		label = fmt.Sprintf("%q, ", e.Label)
+		label = fmt.Sprintf("%q, ", render(e.Label))
 	}
 	return fmt.Sprintf("%s in %s (%s%s)", who, where, label, age(now, e.StartedAt))
 }
@@ -78,7 +102,7 @@ func writeTable(w io.Writer, entries []registry.Entry, now time.Time) error {
 	_, _ = fmt.Fprintln(tw, "PORT\tPID\tAGENT\tSESSION\tWORKTREE\tBRANCH\tLABEL\tAGE")
 	for _, e := range entries {
 		_, _ = fmt.Fprintf(tw, "%d\t%d\t%s\t%s\t%s\t%s\t%s\t%s\n",
-			e.Port, e.PID, e.Agent, shortSession(e.Session), e.Worktree, orDash(e.Branch), orDash(e.Label), age(now, e.StartedAt))
+			e.Port, e.PID, e.Agent, shortSession(e.Session), render(e.Worktree), orDash(render(e.Branch)), orDash(render(e.Label)), age(now, e.StartedAt))
 	}
 	return tw.Flush()
 }

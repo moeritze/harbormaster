@@ -23,7 +23,7 @@ func newGc(a *app.App) *cobra.Command {
 			}
 			_, _ = fmt.Fprintf(a.Stdout, "pruned %d\n", len(pruned))
 			for _, r := range pruned {
-				_, _ = fmt.Fprintf(a.Stdout, "%d\t%s\t%s\n", r.Port, r.Reason, orDash(r.Worktree))
+				_, _ = fmt.Fprintf(a.Stdout, "%d\t%s\t%s\n", r.Port, r.Reason, orDash(render(r.Worktree)))
 			}
 			return nil
 		},

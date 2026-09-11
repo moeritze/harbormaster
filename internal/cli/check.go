@@ -69,7 +69,7 @@ func checkPort(a *app.App, port int) (checkResult, int) {
 		pid, cmdName, ok := a.PidOnPort(port)
 		owner := "unknown process"
 		if ok {
-			owner = fmt.Sprintf("pid %d (%s), not registered", pid, cmdName)
+			owner = fmt.Sprintf("pid %d (%s), not registered", pid, render(cmdName))
 		}
 		return checkResult{Port: port, Status: "unregistered", Owner: owner, PID: pid}, ExitUnregistered
 	}
