@@ -4,6 +4,7 @@ package install
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -93,8 +94,55 @@ func backupPath(settings string, now func() time.Time) string {
 	return fmt.Sprintf("%s.harbormaster-backup-%d", settings, now().Unix())
 }
 
-func writeBackup(path string, raw []byte) error {
-	return os.WriteFile(path, raw, 0o600) //nolint:gosec // path is built from Settings, itself derived from the caller's configured ConfigDir
+// maxBackups bounds the -1, -2, … search. Reaching it means something is
+// writing backups in a loop; erroring out beats spinning.
+const maxBackups = 100
+
+// writeBackup copies raw to path without ever overwriting a file that is
+// already there, and returns the path it actually wrote. The name carries a
+// one-second timestamp, so an install and an uninstall in the same second —
+// or two installs, or a clock that does not move in tests — would otherwise
+// have the second backup destroy the only copy of the user's original file.
+// O_EXCL makes that race impossible; on collision the suffix -1, -2, … is
+// appended.
+func writeBackup(path string, raw []byte) (string, error) {
+	for i := 0; i < maxBackups; i++ {
+		p := path
+		if i > 0 {
+			p = fmt.Sprintf("%s-%d", path, i)
+		}
+		f, err := os.OpenFile(p, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600) //nolint:gosec // path is built from Settings, itself derived from the caller's configured ConfigDir
+		if errors.Is(err, os.ErrExist) {
+			continue
+		}
+		if err != nil {
+			return "", err
+		}
+		if _, err := f.Write(raw); err != nil {
+			_ = f.Close()
+			return "", err
+		}
+		if err := f.Close(); err != nil {
+			return "", err
+		}
+		return p, nil
+	}
+	return "", fmt.Errorf("%s: %d backups already exist; remove some before installing again", path, maxBackups)
+}
+
+// unsafeCommandChars are the characters a shell would interpret. The hook
+// command is written into a settings file and run as a command line by the
+// agent, so a path carrying any of them could inject a second command.
+// Quoting handles whitespace (see command); these are refused outright.
+const unsafeCommandChars = "$`\\\"';|&<>()"
+
+// checkCommand refuses a hook command path that a shell would not treat as
+// one word.
+func checkCommand(c string) error {
+	if i := strings.IndexAny(c, unsafeCommandChars); i >= 0 {
+		return fmt.Errorf("command %q contains %q, which a shell would interpret; hooks run this string as a command line — install with --command pointing at a path without shell metacharacters", c, string(c[i]))
+	}
+	return nil
 }
 
 // guardPaths refuses to touch a settings file or skill file that is a
@@ -114,6 +162,9 @@ func Claude(o Options) (Report, error) {
 		o.Now = time.Now
 	}
 	r := Report{Settings: filepath.Join(o.ConfigDir, "settings.json"), SkillPath: filepath.Join(o.ConfigDir, "skills", "harbormaster", "SKILL.md")}
+	if err := checkCommand(o.Command); err != nil {
+		return r, err
+	}
 	if err := guardPaths(r); err != nil {
 		return r, err
 	}
@@ -167,9 +218,11 @@ func Claude(o Options) (Report, error) {
 	}
 	if changed {
 		if r.Backup != "" {
-			if err := writeBackup(r.Backup, s.raw); err != nil {
+			p, err := writeBackup(r.Backup, s.raw)
+			if err != nil {
 				return r, err
 			}
+			r.Backup = p
 		}
 		if err := os.MkdirAll(o.ConfigDir, 0o750); err != nil {
 			return r, err
@@ -245,9 +298,11 @@ func ClaudeUninstall(o Options) (Report, error) {
 	}
 	if changed {
 		if r.Backup != "" {
-			if err := writeBackup(r.Backup, s.raw); err != nil {
+			p, err := writeBackup(r.Backup, s.raw)
+			if err != nil {
 				return r, err
 			}
+			r.Backup = p
 		}
 		if err := s.write(r.Settings); err != nil {
 			return r, err

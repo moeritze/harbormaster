@@ -9,19 +9,26 @@ import (
 	"sort"
 	"strings"
 	"time"
+	"unicode"
 )
 
 // Cursor hooks live in <config>/hooks.json ("version": 1); each entry is
 // flat: {"command", "type", "timeout", …}. Verified against
 // https://cursor.com/docs/hooks on 2026-09-11.
 
-// ourCursorCommand matches exactly the command strings Cursor() writes.
+// ourCursorCommand matches exactly the command strings Cursor() writes, and
+// afterShellExecution besides: harbormaster installed that hook once, so the
+// matcher has to keep recognising it for an uninstall to clean it up.
 var ourCursorCommand = regexp.MustCompile(`^(?:"[^"]*"|\S+)\s+hook cursor (?:sessionStart|beforeShellExecution|afterShellExecution|sessionEnd)$`)
 
+// cursorHooks are the events harbormaster installs. afterShellExecution is
+// deliberately absent: Cursor documents no output fields for it, so the
+// post-start nudge it would carry has nowhere to go, and the hook would run
+// a process after every single shell command for nothing. The adapter still
+// parses it, so an install that predates this still behaves.
 var cursorHooks = []hookSpec{
 	{"sessionStart", "", 5},
 	{"beforeShellExecution", "", 5},
-	{"afterShellExecution", "", 5},
 	{"sessionEnd", "", 3},
 }
 
@@ -39,7 +46,7 @@ func (o CursorOptions) command(event string) string {
 	if c == "" {
 		c = "harbormaster"
 	}
-	if strings.ContainsAny(c, " \t") {
+	if strings.ContainsFunc(c, unicode.IsSpace) {
 		c = `"` + c + `"`
 	}
 	return c + " hook cursor " + event
@@ -65,6 +72,9 @@ func Cursor(o CursorOptions) (Report, error) {
 		o.Now = time.Now
 	}
 	r := cursorReport(o)
+	if err := checkCommand(o.Command); err != nil {
+		return r, err
+	}
 	if err := guardPaths(r); err != nil {
 		return r, err
 	}
@@ -121,9 +131,11 @@ func Cursor(o CursorOptions) (Report, error) {
 	}
 	if changed {
 		if r.Backup != "" {
-			if err := writeBackup(r.Backup, s.raw); err != nil {
+			p, err := writeBackup(r.Backup, s.raw)
+			if err != nil {
 				return r, err
 			}
+			r.Backup = p
 		}
 		if err := os.MkdirAll(o.ConfigDir, 0o750); err != nil {
 			return r, err
@@ -148,8 +160,10 @@ func CursorUninstall(o CursorOptions) (Report, error) {
 	if o.Now == nil {
 		o.Now = time.Now
 	}
+	// cursorReport sets SkillPath only when Rule != nil, i.e. for a project
+	// install. A user-level install never wrote ~/.cursor/rules — those are
+	// the user's own rules — so a user-level uninstall must not touch it.
 	r := cursorReport(o)
-	r.SkillPath = filepath.Join(o.ConfigDir, "rules", "harbormaster.mdc")
 	if err := guardPaths(r); err != nil {
 		return r, err
 	}
@@ -191,25 +205,31 @@ func CursorUninstall(o CursorOptions) (Report, error) {
 		r.Backup = backupPath(r.Settings, o.Now)
 		r.Actions = append(r.Actions, "back up "+r.Settings+" to "+r.Backup)
 	}
-	if _, err := os.Stat(r.SkillPath); err == nil {
-		r.Actions = append(r.Actions, "remove "+r.SkillPath)
+	if r.SkillPath != "" {
+		if _, err := os.Stat(r.SkillPath); err == nil {
+			r.Actions = append(r.Actions, "remove "+r.SkillPath)
+		}
 	}
 	if o.DryRun {
 		return r, nil
 	}
 	if changed {
 		if r.Backup != "" {
-			if err := writeBackup(r.Backup, s.raw); err != nil {
+			p, err := writeBackup(r.Backup, s.raw)
+			if err != nil {
 				return r, err
 			}
+			r.Backup = p
 		}
 		if err := s.write(r.Settings); err != nil {
 			return r, err
 		}
 	}
-	if err := os.Remove(r.SkillPath); err != nil && !os.IsNotExist(err) {
-		return r, err
+	if r.SkillPath != "" {
+		if err := os.Remove(r.SkillPath); err != nil && !os.IsNotExist(err) {
+			return r, err
+		}
+		_ = os.Remove(filepath.Dir(r.SkillPath)) // only succeeds when empty
 	}
-	_ = os.Remove(filepath.Dir(r.SkillPath)) // only succeeds when empty
 	return r, nil
 }
