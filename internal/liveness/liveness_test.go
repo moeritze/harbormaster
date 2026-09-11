@@ -4,6 +4,7 @@ import (
 	"net"
 	"os"
 	"os/exec"
+	"strings"
 	"testing"
 	"time"
 
@@ -37,6 +38,24 @@ func TestPortListening(t *testing.T) {
 	ln.Close() //nolint:errcheck,gosec // test cleanup; close error is not actionable
 	if p.PortListening(port) {
 		t.Fatal("expected closed")
+	}
+
+	// A server bound to the IPv6 loopback only must count as listening too.
+	ln6, err := net.Listen("tcp", "[::1]:0")
+	if err != nil {
+		if strings.Contains(err.Error(), "cannot assign") || strings.Contains(err.Error(), "not supported") ||
+			strings.Contains(err.Error(), "unsupported") || strings.Contains(err.Error(), "no route") {
+			t.Skip("IPv6 loopback unavailable here:", err)
+		}
+		t.Fatal(err)
+	}
+	port6 := ln6.Addr().(*net.TCPAddr).Port
+	if !p.PortListening(port6) {
+		t.Fatal("expected ::1 listener to count as listening")
+	}
+	ln6.Close() //nolint:errcheck,gosec // test cleanup; close error is not actionable
+	if p.PortListening(port6) {
+		t.Fatal("expected closed after the ::1 listener went away")
 	}
 }
 
