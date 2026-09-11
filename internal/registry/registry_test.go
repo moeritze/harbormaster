@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -71,8 +72,12 @@ func TestUpdatePersistsAndFileMode0600(t *testing.T) {
 	if st.Mode().Perm() != 0o600 {
 		t.Fatalf("mode %o", st.Mode().Perm())
 	}
-	if _, err := os.Stat(filepath.Join(s.Dir(), "registry.json.tmp")); !os.IsNotExist(err) {
-		t.Fatal("temp file left behind")
+	left, err := filepath.Glob(filepath.Join(s.Dir(), "registry-*.tmp"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(left) != 0 {
+		t.Fatalf("temp files left behind: %v", left)
 	}
 }
 
@@ -299,5 +304,169 @@ func TestLoadRejectsUnknownVersion(t *testing.T) {
 	}
 	if _, err := s.Load(); err == nil {
 		t.Fatal("expected version error")
+	}
+}
+
+// --- H1: symlink-safe atomic writes -----------------------------------
+
+// TestWriteIgnoresPlantedTempSymlink pins H1: the registry write no longer
+// uses a predictable "registry.json.tmp" path, so a symlink planted there
+// cannot be used to make harbormaster write through it.
+func TestWriteIgnoresPlantedTempSymlink(t *testing.T) {
+	s := open(t)
+	victim := filepath.Join(t.TempDir(), "victim")
+	if err := os.WriteFile(victim, []byte("untouched"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(victim, filepath.Join(s.Dir(), "registry.json.tmp")); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := s.Update(func(f *registry.File) error {
+		f.Entries = append(f.Entries, registry.Entry{ID: "a", Port: 3000, PID: 1, StartedAt: fixedNow()})
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	fi, err := os.Lstat(filepath.Join(s.Dir(), "registry.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !fi.Mode().IsRegular() {
+		t.Fatalf("registry.json is not a regular file: %v", fi.Mode())
+	}
+	b, err := os.ReadFile(victim) //nolint:gosec // test-controlled path
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(b) != "untouched" {
+		t.Fatalf("symlink target was written through: %q", b)
+	}
+}
+
+// TestAppendHistoryIgnoresPlantedTempSymlink is the history.jsonl half of H1.
+func TestAppendHistoryIgnoresPlantedTempSymlink(t *testing.T) {
+	s := open(t)
+	victim := filepath.Join(t.TempDir(), "victim")
+	if err := os.WriteFile(victim, []byte("untouched"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(victim, filepath.Join(s.Dir(), "history.jsonl.tmp")); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := s.AppendHistory(registry.HistoryRecord{Entry: registry.Entry{ID: "x", Port: 3000}, Reason: "test", At: fixedNow()}); err != nil {
+		t.Fatal(err)
+	}
+
+	fi, err := os.Lstat(filepath.Join(s.Dir(), "history.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !fi.Mode().IsRegular() {
+		t.Fatalf("history.jsonl is not a regular file: %v", fi.Mode())
+	}
+	b, err := os.ReadFile(victim) //nolint:gosec // test-controlled path
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(b) != "untouched" {
+		t.Fatalf("symlink target was written through: %q", b)
+	}
+}
+
+func TestLoadRefusesSymlinkedRegistry(t *testing.T) {
+	s := open(t)
+	target := filepath.Join(t.TempDir(), "elsewhere.json")
+	if err := os.WriteFile(target, []byte(`{"version":1,"entries":[]}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(target, filepath.Join(s.Dir(), "registry.json")); err != nil {
+		t.Fatal(err)
+	}
+	_, err := s.Load()
+	if err == nil || !strings.Contains(err.Error(), "is a symlink; refusing to operate") {
+		t.Fatalf("got %v, want a symlink refusal", err)
+	}
+}
+
+func TestHistoryRefusesSymlinkedFile(t *testing.T) {
+	s := open(t)
+	target := filepath.Join(t.TempDir(), "elsewhere.jsonl")
+	if err := os.WriteFile(target, []byte("\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(target, filepath.Join(s.Dir(), "history.jsonl")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.History(0); err == nil || !strings.Contains(err.Error(), "is a symlink; refusing to operate") {
+		t.Fatalf("History: got %v, want a symlink refusal", err)
+	}
+	err := s.AppendHistory(registry.HistoryRecord{Entry: registry.Entry{ID: "x"}, Reason: "test", At: fixedNow()})
+	if err == nil || !strings.Contains(err.Error(), "is a symlink; refusing to operate") {
+		t.Fatalf("AppendHistory: got %v, want a symlink refusal", err)
+	}
+}
+
+// --- H2: state directory validation -----------------------------------
+
+func TestOpenRefusesSymlinkedStateDir(t *testing.T) {
+	base := t.TempDir()
+	target := filepath.Join(base, "target")
+	if err := os.Mkdir(target, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(base, "link")
+	if err := os.Symlink(target, link); err != nil {
+		t.Fatal(err)
+	}
+	_, err := registry.Open(link, alwaysAlive{}, fixedNow)
+	if err == nil || !strings.Contains(err.Error(), "is a symlink") {
+		t.Fatalf("got %v, want a symlink refusal", err)
+	}
+}
+
+func TestOpenRefusesGroupOtherWritableStateDir(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "hm")
+	if err := os.Mkdir(dir, 0o777); err != nil { //nolint:gosec // the world-writable dir is exactly what this test asserts is refused
+		t.Fatal(err)
+	}
+	if err := os.Chmod(dir, 0o777); err != nil { //nolint:gosec // defeat the umask: the test needs the write bits actually set
+		t.Fatal(err)
+	}
+	_, err := registry.Open(dir, alwaysAlive{}, fixedNow)
+	if err == nil || !strings.Contains(err.Error(), "group/other-writable") {
+		t.Fatalf("got %v, want a group/other-writable refusal", err)
+	}
+	if !strings.Contains(err.Error(), "chmod 700") {
+		t.Fatalf("error should say how to fix it: %v", err)
+	}
+}
+
+// TestOpenAcceptsExistingPrivateDirUnchanged is H2's happy path: a
+// pre-existing directory that is not writable by group or other is accepted
+// and, per the existing rule, never re-chmodded.
+func TestOpenAcceptsExistingPrivateDirUnchanged(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "hm")
+	if err := os.Mkdir(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(dir, 0o750); err != nil { //nolint:gosec // group-readable on purpose: this dir must be accepted and left alone
+		t.Fatal(err)
+	}
+	s, err := registry.Open(dir, alwaysAlive{}, fixedNow)
+	if err != nil {
+		t.Fatalf("group-readable but not group-writable dir must be accepted: %v", err)
+	}
+	if _, err := s.Load(); err != nil {
+		t.Fatal(err)
+	}
+	st, err := os.Stat(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st.Mode().Perm() != 0o750 {
+		t.Fatalf("existing dir was re-chmodded to %o", st.Mode().Perm())
 	}
 }
