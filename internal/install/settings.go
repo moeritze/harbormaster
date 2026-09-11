@@ -13,6 +13,7 @@ import (
 type settings struct {
 	doc  map[string]any
 	perm os.FileMode
+	raw  []byte // exact bytes read from disk, nil if the file did not exist; used for the backup
 }
 
 func dirOf(path string) string {
@@ -28,6 +29,7 @@ func readSettings(path string) (*settings, error) {
 	if err != nil {
 		return nil, err
 	}
+	s.raw = b
 	if st, err := os.Stat(path); err == nil {
 		s.perm = st.Mode().Perm()
 	}
