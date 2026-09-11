@@ -83,12 +83,12 @@ func (s *Store) Load() (*File, error) {
 	}
 	defer unlock()
 
-	f, dirty, err := s.readPruned()
+	f, pruned, err := s.readPruned()
 	if err != nil {
 		return nil, err
 	}
-	if dirty {
-		if err := s.write(f); err != nil {
+	if len(pruned) > 0 {
+		if err := s.commit(f, pruned); err != nil {
 			return nil, err
 		}
 	}
@@ -105,32 +105,44 @@ func (s *Store) Update(fn func(f *File) error) error {
 	}
 	defer unlock()
 
-	f, _, err := s.readPruned()
+	f, pruned, err := s.readPruned()
 	if err != nil {
 		return err
 	}
 	if err := fn(f); err != nil {
 		return err
 	}
-	return s.write(f)
+	return s.commit(f, pruned)
 }
 
-// readPruned reads the document and prunes it, recording any pruned entries
-// to history. Must be called with the lock held. The bool result reports
-// whether anything was pruned (i.e. whether the caller's in-memory copy now
-// differs from what's on disk).
-func (s *Store) readPruned() (*File, bool, error) {
+// readPruned reads the document and prunes it in memory. It is side-effect
+// free: nothing is written to registry.json or history.jsonl. Must be
+// called with the lock held. The caller is responsible for calling commit
+// to persist both the pruned document and the pruned records.
+func (s *Store) readPruned() (*File, []HistoryRecord, error) {
 	f, err := s.read()
 	if err != nil {
-		return nil, false, err
+		return nil, nil, err
 	}
 	pruned := s.prune(f)
+	return f, pruned, nil
+}
+
+// commit persists f and then, only once that succeeds, appends each pruned
+// record to history. The registry write must happen first: if the history
+// append then fails, a retry re-reads a registry that already reflects the
+// pruned entries, so it finds nothing left to prune and cannot duplicate
+// history records. Must be called with the lock held.
+func (s *Store) commit(f *File, pruned []HistoryRecord) error {
+	if err := s.write(f); err != nil {
+		return err
+	}
 	for _, rec := range pruned {
 		if err := s.appendHistoryLocked(rec); err != nil {
-			return nil, false, err
+			return err
 		}
 	}
-	return f, len(pruned) > 0, nil
+	return nil
 }
 
 func (s *Store) read() (*File, error) {

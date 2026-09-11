@@ -1,6 +1,7 @@
 package registry_test
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"sync"
@@ -14,6 +15,12 @@ type alwaysAlive struct{}
 
 func (alwaysAlive) PidAlive(int) bool      { return true }
 func (alwaysAlive) PortListening(int) bool { return true }
+
+// deadPID reports every pid dead except the ones listed as alive.
+type deadPID struct{ alive map[int]bool }
+
+func (d deadPID) PidAlive(pid int) bool { return d.alive[pid] }
+func (deadPID) PortListening(int) bool  { return true }
 
 func fixedNow() time.Time { return time.Date(2026, 9, 10, 12, 0, 0, 0, time.UTC) }
 
@@ -108,6 +115,62 @@ func TestLoadDoesNotRewriteWhenNothingPruned(t *testing.T) {
 	}
 	if string(beforeBytes) != string(afterBytes) {
 		t.Fatal("registry.json bytes changed on Load with nothing pruned")
+	}
+}
+
+func TestFailedUpdateDoesNotPersistPrunedHistory(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "hm")
+	// pid 123 is reported dead from the start; the seeded entry only becomes
+	// prunable once it's actually on disk (pruning runs before fn on each call).
+	s, err := registry.Open(dir, deadPID{alive: map[int]bool{}}, fixedNow)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if err := s.Update(func(f *registry.File) error {
+		f.Entries = append(f.Entries, registry.Entry{ID: "a", Port: 4000, PID: 123, StartedAt: fixedNow()})
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	path := filepath.Join(s.Dir(), "registry.json")
+	before, err := os.ReadFile(path) //nolint:gosec // test-controlled path
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	boom := errors.New("boom")
+	if err := s.Update(func(*registry.File) error { return boom }); !errors.Is(err, boom) {
+		t.Fatalf("expected boom, got %v", err)
+	}
+
+	after, err := os.ReadFile(path) //nolint:gosec // test-controlled path
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(before) != string(after) {
+		t.Fatal("registry.json changed even though fn returned an error")
+	}
+	if recs, err := s.History(0); err != nil {
+		t.Fatal(err)
+	} else if len(recs) != 0 {
+		t.Fatalf("expected no history records after failed Update, got %d", len(recs))
+	}
+
+	f, err := s.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(f.Entries) != 0 {
+		t.Fatalf("expected the dead-pid entry to be pruned, got %+v", f.Entries)
+	}
+	recs, err := s.History(0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(recs) != 1 {
+		t.Fatalf("expected exactly one history record after Load, got %d", len(recs))
 	}
 }
 
