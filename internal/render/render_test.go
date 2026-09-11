@@ -46,6 +46,21 @@ func TestTableAndOwnerLine(t *testing.T) {
 	}
 }
 
+// TestTableBlankFieldsRenderAsDash: a claimed entry has no worktree, and an
+// empty cell in a tab-aligned table silently merges with its neighbour.
+func TestTableBlankFieldsRenderAsDash(t *testing.T) {
+	now := time.Date(2026, 9, 11, 12, 0, 0, 0, time.UTC)
+	e := registry.Entry{Port: 3000, PID: 1, Agent: "claude", Session: "s", StartedAt: now}
+	var buf bytes.Buffer
+	if err := render.Table(&buf, []registry.Entry{e}, now); err != nil {
+		t.Fatal(err)
+	}
+	row := strings.Split(strings.TrimSpace(buf.String()), "\n")[1]
+	if strings.Count(row, "-") != 3 {
+		t.Fatalf("worktree, branch and label must all render as \"-\": %q", row)
+	}
+}
+
 func TestAgeBuckets(t *testing.T) {
 	now := time.Date(2026, 9, 11, 12, 0, 0, 0, time.UTC)
 	cases := []struct {

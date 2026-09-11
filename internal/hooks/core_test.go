@@ -2,6 +2,7 @@ package hooks_test
 
 import (
 	"bytes"
+	"fmt"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -334,5 +335,22 @@ func TestNewReadsOverrideFromTheEnvironment(t *testing.T) {
 	t.Setenv("HARBORMASTER_HOOKS", "")
 	if c := hooks.New(nil); c.Disabled {
 		t.Fatal("hooks must be on by default")
+	}
+}
+
+// TestSessionContextCapsTheTable keeps a machine with many registered
+// servers from pushing a wall of mostly irrelevant rows into every new
+// session's context.
+func TestSessionContextCapsTheTable(t *testing.T) {
+	x := newH(t)
+	for i := range 35 {
+		x.seed(t, registry.Entry{ID: fmt.Sprint(i), Port: 3100 + i, PID: 100 + i, Agent: "claude", Session: "other"})
+	}
+	r := x.core.Handle(ev(hooks.SessionStart, "me", ""))
+	if !strings.Contains(r.Context, "… and 5 more (run harbormaster ls)") {
+		t.Fatalf("missing the truncation line:\n%s", r.Context)
+	}
+	if strings.Contains(r.Context, "3134") {
+		t.Fatalf("row past the cap was rendered:\n%s", r.Context)
 	}
 }
