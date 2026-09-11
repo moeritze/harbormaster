@@ -29,14 +29,15 @@ func newRelease(a *app.App) *cobra.Command {
 			if port == 0 && session == "" && !allMine {
 				return exitf(ExitUsage, "specify a port, --session ID, or --all-mine")
 			}
-			// The port form and --all-mine both rest on ownership, so a
-			// caller with no session id owns nothing here (see
-			// requireSession). --session names an id explicitly and is
-			// checked per entry below.
-			if port != 0 || allMine {
-				if err := requireSession(a, force); err != nil {
-					return err
-				}
+			// Every form of release rests on ownership, so a caller with
+			// no session id owns nothing here (see requireSession).
+			// --session is no exception: naming an id is a claim about
+			// whose entries these are, and the per-entry check below falls
+			// back to worktree equality for a caller without a session,
+			// which would hand anyone in the right directory a release of
+			// somebody else's servers.
+			if err := requireSession(a, force); err != nil {
+				return err
 			}
 			var removed []registry.Entry
 			err := registryErr(a.Store.Update(func(f *registry.File) error {
