@@ -13,6 +13,25 @@ import (
 	"github.com/moeritze/harbormaster/internal/tools"
 )
 
+// pinnedEnv is the environment every helper process is run with. Locale and
+// time zone decide how `ps` formats the start time it prints ("Do Sep 11
+// 10:00:00 2026" under LC_ALL=de_DE.UTF-8, a different wall clock under
+// TZ=Europe/Berlin), so an entry registered from one shell would not match
+// the lookup made from another -- and a start time that does not match reads
+// as a reused pid, which refuses a kill the caller is entitled to. PATH is
+// pinned as well so nothing the caller exported can influence what these
+// programs find; the programs themselves are already resolved to absolute
+// paths by tools.Path.
+var pinnedEnv = []string{"LC_ALL=C", "LANG=C", "TZ=UTC", "PATH=/usr/bin:/bin"}
+
+// output runs bin with args under pinnedEnv and returns its standard output.
+// Every tool whose output harbormaster parses goes through here.
+func output(bin string, args ...string) ([]byte, error) {
+	cmd := exec.Command(bin, args...)
+	cmd.Env = pinnedEnv
+	return cmd.Output()
+}
+
 // PidAlive sends signal 0. EPERM means the process exists but belongs to someone else.
 func (OS) PidAlive(pid int) bool {
 	if pid <= 0 {
@@ -28,7 +47,7 @@ func PidUID(pid int) (int, error) {
 	if ps == "" {
 		return 0, errors.New("ps not found; refusing to guess a process owner")
 	}
-	out, err := exec.Command(ps, "-o", "uid=", "-p", strconv.Itoa(pid)).Output()
+	out, err := output(ps, "-o", "uid=", "-p", strconv.Itoa(pid))
 	if err != nil {
 		return 0, err
 	}
@@ -39,15 +58,23 @@ func PidUID(pid int) (int, error) {
 	return strconv.Atoi(s)
 }
 
-// PidStartTime returns an opaque, stable description of when pid started
-// (ps's lstart column). Two processes that ever share a pid still differ
-// here, which is what lets a signal be refused after pid reuse.
+// PidStartTime returns an opaque, stable description of when pid started.
+// Two processes that ever share a pid still differ here, which is what lets
+// a signal be refused after pid reuse.
+//
+// On Linux the value is "proc:<ticks>" from /proc/<pid>/stat: an integer the
+// kernel never reformats, immune to locale and time zone. Everywhere else it
+// is ps's lstart column, read under a pinned environment for the same
+// reason. The two forms never mix on one machine.
 func PidStartTime(pid int) (string, error) {
+	if s, ok := procStartTime(pid); ok {
+		return s, nil
+	}
 	ps := tools.Path("ps")
 	if ps == "" {
 		return "", errors.New("ps not found")
 	}
-	out, err := exec.Command(ps, "-o", "lstart=", "-p", strconv.Itoa(pid)).Output()
+	out, err := output(ps, "-o", "lstart=", "-p", strconv.Itoa(pid))
 	if err != nil {
 		return "", err
 	}
@@ -64,7 +91,7 @@ func PidOnPort(port int) (int, string, bool) {
 	if lsof == "" {
 		return 0, "", false
 	}
-	out, err := exec.Command(lsof, "-nP", "-iTCP:"+strconv.Itoa(port), "-sTCP:LISTEN", "-Fpc").Output()
+	out, err := output(lsof, "-nP", "-iTCP:"+strconv.Itoa(port), "-sTCP:LISTEN", "-Fpc")
 	if err != nil {
 		return 0, "", false
 	}
