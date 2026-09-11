@@ -49,18 +49,29 @@ type pattern struct {
 var (
 	wrappedRe = regexp.MustCompile(`(?:^|[\s;&|(])(?:harbormaster|hm)\s+run\b`)
 
-	// notKillRe excludes harbormaster's own "kill"-named subcommands
-	// (e.g. "hm kill 3000") from the process-kill classification: they
-	// target a registry entry by port, not an arbitrary process.
-	notKillRe = regexp.MustCompile(`(?:^|[\s;&|(])(?:harbormaster|hm)\s+(?:kill|check|claim|release|ls)\b`)
+	// hmClauseRe matches a whole "(harbormaster|hm) <subcommand> ..."
+	// clause, from its leading word up to (but not including) the next
+	// shell control operator (;, &&, ||, |) or the end of the string.
+	// blankHmClauses uses it to blank out harbormaster's own subcommands
+	// before kill-pattern matching, so a compound command like
+	// "hm kill 3000 && kill -9 1234" still finds the real "kill -9 1234"
+	// instead of the whole line being swallowed by one hm clause.
+	hmClauseRe = regexp.MustCompile(`(?:^|[\s;&|(])(?:harbormaster|hm)\s+[^\s;&|]+[^;&|]*`)
 
+	// Known blind spots (this package is a heuristic by design, see the
+	// package doc comment): these read command *text*, not where or
+	// whether it actually runs, so "ssh host kill 123" and "echo kill
+	// 1234" are classified as Kill even though the kill is remote or
+	// never executed at all; conversely, job-control targets like
+	// "kill %1" are a miss, since a %-job-spec has no pid to extract.
 	killPatterns = []pattern{
-		// A leading "-9"/"-TERM" right after kill is always a signal
-		// spec, never a pid, so it never satisfies the target group on
-		// its own (that's what stops "xargs kill -9" with no literal
-		// pid from being misread as pid 9). A literal "--" switches to
-		// the process-group form, where a negative number is the target.
-		{"kill", regexp.MustCompile(`(?:^|[\s;&|($])kill\s+(?:(?:-[A-Za-z0-9]+\s+)*\d+(?:\s+\d+)*|--\s+-?\d+(?:\s+-?\d+)*)`)},
+		// A leading "-9"/"-TERM" (or two-token "-s TERM"/"-s 9") right
+		// after kill is always a signal spec, never a pid, so it never
+		// satisfies the target group on its own (that's what stops
+		// "xargs kill -9" with no literal pid from being misread as pid
+		// 9). A literal "--" switches to the process-group form, where a
+		// negative number is the target.
+		{"kill", regexp.MustCompile(`(?:^|[\s;&|($])kill\s+(?:(?:-s\s+[A-Za-z0-9]+\s+|-[A-Za-z0-9]+\s+)*\d+(?:\s+\d+)*|--\s+-?\d+(?:\s+-?\d+)*)`)},
 		{"pkill", regexp.MustCompile(`(?:^|[\s;&|(])pkill\b`)},
 		{"killall", regexp.MustCompile(`(?:^|[\s;&|(])killall\b`)},
 		{"fuser-k", regexp.MustCompile(`(?:^|[\s;&|(])fuser\s+-k\b`)},
@@ -90,9 +101,11 @@ var (
 	// Explicit build/test invocations that would otherwise match "vite".
 	notServerRe = regexp.MustCompile(`(?:^|[\s;&|(])vite\s+build\b`)
 
+	// portPatterns are unconditional: each targets a marker specific
+	// enough (an explicit --port/PORT=, an address, or a harbormaster
+	// subcommand) that it never fires on an unrelated command.
 	portPatterns = []*regexp.Regexp{
 		regexp.MustCompile(`--port[=\s]+(\d{2,5})\b`),
-		regexp.MustCompile(`(?:^|\s)-p\s*(\d{2,5})\b`),
 		regexp.MustCompile(`\bPORT=(\d{2,5})\b`),
 		regexp.MustCompile(`\bhttp\.server\s+(\d{2,5})\b`),
 		regexp.MustCompile(`(?:localhost|127\.0\.0\.1|0\.0\.0\.0|\[::1\]):(\d{2,5})\b`),
@@ -101,11 +114,31 @@ var (
 		regexp.MustCompile(`\b(?:hm|harbormaster)\s+(?:kill|check|claim|release)\s+(\d{2,5})\b`),
 	}
 
+	// pFlagPortRe is the bare "-p N" port flag. Unlike the patterns
+	// above, "-p" is used by plenty of unrelated tools for unrelated
+	// things (mkdir -p, docker run -p HOST:CONTAINER, tar -p, ...), so
+	// it's only ever consulted once a command is already classified Kill
+	// or ServerStart by some other, unambiguous signal (see Classify).
+	pFlagPortRe = regexp.MustCompile(`(?:^|\s)-p\s*(\d{2,5})\b`)
+
 	// killPidRe mirrors the "kill" classify pattern's two forms: plain
 	// pids (group 1, no leading dash, since a leading "-9" is a signal)
 	// or, after a literal "--", process-group targets (group 2, dash allowed).
-	killPidRe = regexp.MustCompile(`(?:^|[\s;&|(])kill\s+(?:(?:-[A-Za-z0-9]+\s+)*(\d+(?:\s+\d+)*)|--\s+(-?\d+(?:\s+-?\d+)*))`)
+	killPidRe = regexp.MustCompile(`(?:^|[\s;&|(])kill\s+(?:(?:-s\s+[A-Za-z0-9]+\s+|-[A-Za-z0-9]+\s+)*(\d+(?:\s+\d+)*)|--\s+(-?\d+(?:\s+-?\d+)*))`)
 )
+
+// blankHmClauses replaces every harbormaster/hm subcommand clause in cmd
+// with spaces of the same length, so kill-pattern matching never mistakes
+// harbormaster's own subcommands (which target a registry entry by port,
+// not an OS process — "hm kill 3000", "hm ls", ...) for a real kill, while
+// leaving the rest of a compound command intact. Classify still uses the
+// original cmd (not this blanked copy) for Wrapped and for port
+// extraction, so e.g. "hm kill 3000 && kill -9 1234" still reports port 3000.
+func blankHmClauses(cmd string) string {
+	return hmClauseRe.ReplaceAllStringFunc(cmd, func(m string) string {
+		return strings.Repeat(" ", len(m))
+	})
+}
 
 // Classify inspects one shell command line.
 func Classify(cmd string) Result {
@@ -115,29 +148,28 @@ func Classify(cmd string) Result {
 		return r
 	}
 	r.Wrapped = wrappedRe.MatchString(cmd)
-	r.Ports = ports(cmd)
 
-	if !notKillRe.MatchString(cmd) {
-		for _, p := range killPatterns {
-			if p.re.MatchString(cmd) {
-				r.Class, r.Matched = Kill, p.name
-				r.Pids = pids(cmd)
-				return r
-			}
+	killScan := blankHmClauses(cmd)
+	for _, p := range killPatterns {
+		if p.re.MatchString(killScan) {
+			r.Class, r.Matched = Kill, p.name
+			r.Pids = pids(killScan)
+			break
 		}
 	}
-	if !notServerRe.MatchString(cmd) {
+	if r.Class == None && !notServerRe.MatchString(cmd) {
 		for _, p := range serverPatterns {
 			if p.re.MatchString(cmd) {
 				r.Class, r.Matched = ServerStart, p.name
-				return r
+				break
 			}
 		}
 	}
+	r.Ports = ports(cmd, r.Class != None)
 	return r
 }
 
-func ports(cmd string) []int {
+func ports(cmd string, includePFlag bool) []int {
 	seen := map[int]bool{}
 	var out []int
 	add := func(s string) {
@@ -152,6 +184,11 @@ func ports(cmd string) []int {
 	}
 	for _, re := range portPatterns {
 		for _, m := range re.FindAllStringSubmatch(cmd, -1) {
+			add(m[1])
+		}
+	}
+	if includePFlag {
+		for _, m := range pFlagPortRe.FindAllStringSubmatch(cmd, -1) {
 			add(m[1])
 		}
 	}
