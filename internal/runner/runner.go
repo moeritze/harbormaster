@@ -44,7 +44,16 @@ func Run(ctx context.Context, a *app.App, opts Options, register Register) (int,
 	}
 
 	cmd := exec.Command(opts.Args[0], opts.Args[1:]...) //nolint:gosec // running the user's command is the purpose
-	cmd.Stdin = os.Stdin
+	// The child runs in its own process group, so it is never the terminal's
+	// foreground group: reading from a shared tty would earn it SIGTTIN (and
+	// SIGTTOU for terminal writes) and stop the dev server dead. Detach stdin
+	// when harbormaster was started from a terminal. Piped or redirected
+	// stdin -- how agents and CI invoke it -- is passed through unchanged.
+	if stdinIsTerminal() {
+		cmd.Stdin = nil
+	} else {
+		cmd.Stdin = os.Stdin
+	}
 	cmd.Stdout = a.Stdout
 	cmd.Stderr = a.Stderr
 	cmd.Env = append(os.Environ(), "PORT="+strconv.Itoa(opts.Port))

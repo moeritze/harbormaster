@@ -4,9 +4,19 @@ package runner
 
 import (
 	"errors"
+	"os"
 	"os/exec"
 	"syscall"
+
+	"golang.org/x/sys/unix"
 )
+
+// stdinIsTerminal reports whether harbormaster's own stdin is a tty. The
+// ioctl constant differs per platform; see tty_linux.go / tty_darwin.go.
+func stdinIsTerminal() bool {
+	_, err := unix.IoctlGetTermios(int(os.Stdin.Fd()), ioctlReadTermios)
+	return err == nil
+}
 
 func setProcessGroup(cmd *exec.Cmd) {
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
