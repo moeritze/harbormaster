@@ -11,7 +11,11 @@ import (
 )
 
 func main() {
-	a, err := app.New(os.Getenv, os.Stdout, os.Stderr)
+	// The hook entrypoint runs before every shell command a coding-agent
+	// session issues, so it must not pay for git discovery it almost never
+	// uses; the hook core discovers git lazily instead.
+	opts := app.Options{SkipGit: len(os.Args) > 1 && os.Args[1] == "hook"}
+	a, err := app.NewWithOptions(os.Getenv, os.Stdout, os.Stderr, opts)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		if errors.Is(err, app.ErrUsage) {

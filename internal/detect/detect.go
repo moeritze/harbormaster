@@ -56,7 +56,12 @@ var (
 	// before kill-pattern matching, so a compound command like
 	// "hm kill 3000 && kill -9 1234" still finds the real "kill -9 1234"
 	// instead of the whole line being swallowed by one hm clause.
-	hmClauseRe = regexp.MustCompile(`(?:^|[\s;&|(])(?:harbormaster|hm)\s+[^\s;&|]+[^;&|]*`)
+	//
+	// Only harbormaster's *own* subcommands count. Matching any word after
+	// "hm" would let an unrelated program that happens to be called hm (or
+	// a typo, "hm x lsof -ti:3100 | xargs kill") blank out a real kill and
+	// silently disable the hook for that line.
+	hmClauseRe = regexp.MustCompile(`(?:^|[\s;&|(])(?:harbormaster|hm)\s+(?:ls|kill|check|claim|release|run|port|gc|history|install|uninstall|hook|version)\b[^;&|]*`)
 
 	// Known blind spots (this package is a heuristic by design, see the
 	// package doc comment): these read command *text*, not where or
@@ -140,12 +145,23 @@ func blankHmClauses(cmd string) string {
 	})
 }
 
-// Classify inspects one shell command line.
+// maxScan is how much of a command line Classify looks at. Every pattern
+// here is anchored near the start of a clause, so the interesting part of a
+// real command is always in the first few hundred bytes; a megabyte-long
+// heredoc or a generated one-liner would otherwise make a dozen regexes
+// scan the whole thing on the hook's hot path, before every shell command.
+const maxScan = 16 << 10
+
+// Classify inspects one shell command line. Only the first maxScan bytes
+// (16 KiB) are inspected; anything past that is ignored.
 func Classify(cmd string) Result {
 	r := Result{}
 	cmd = strings.TrimSpace(cmd)
 	if cmd == "" {
 		return r
+	}
+	if len(cmd) > maxScan {
+		cmd = cmd[:maxScan]
 	}
 	r.Wrapped = wrappedRe.MatchString(cmd)
 
