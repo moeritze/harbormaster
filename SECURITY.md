@@ -50,6 +50,42 @@ supervisor, and signal handling in `kill`/`release`.
   and friends).
 - A damaged, over-long line in `history.jsonl` is skipped rather than failing
   every later read and write. Registry failures exit with code 4.
+- External programs are resolved to fixed absolute paths, not through your
+  `$PATH`. `ps` (process owner, process start time) is taken from `/bin/ps`,
+  then `/usr/bin/ps`; with neither present harbormaster fails closed rather
+  than guess who owns a pid. `lsof` (which pid holds a port) and `git` (repo,
+  worktree, branch) are looked for in the usual system locations first and
+  fall back to `$PATH` only if none of them exists -- and then only when the
+  hit is an absolute path, so a relative `$PATH` entry can never supply them.
+  Every program whose output is parsed runs with a pinned environment
+  (`LC_ALL=C LANG=C TZ=UTC PATH=/usr/bin:/bin`), so no locale or time zone
+  can change how harbormaster reads it.
+- Every entry records when its process started, and `kill`, `release --kill`
+  and the session-end hook refuse a pid whose start time no longer matches:
+  a pid recycled since registration belongs to someone else now. The value
+  comes from `/proc/<pid>/stat` on Linux (clock ticks) and from
+  `ps -o lstart=` elsewhere, which resolves to one second -- so the guard
+  catches the accidental collision it is meant for (a pid reused hours or
+  days later), not a process deliberately arranged to start in the same
+  second as the original. An entry that has no recorded start time cannot be
+  checked at all: it may still be signalled on its own pid, but never as a
+  process group. `harbormaster ls` records the missing value, and the entry
+  can be group-signalled from the next command on.
+- A `registry.json` that is not valid JSON is moved aside to
+  `registry.json.corrupt-<nanoseconds>` (a fresh name created with `O_EXCL`,
+  next to the registry) and work continues from an empty registry. The move
+  is reported three ways: a warning on stderr, a `quarantined` record in
+  `history.jsonl` naming the copy, and a line in `hook-errors.log` when a
+  hook is what found it. A registry whose `version` this build does not know
+  is *not* quarantined -- it is readable state belonging to some other build,
+  most likely a newer harbormaster -- so every command fails closed and
+  leaves the file alone. Any process running as you can write junk into
+  `registry.json` and trigger a quarantine; what that destroys is
+  bookkeeping, and the servers themselves keep running.
+- Read-only paths -- `history`, and every hook decision -- wait at most 1 s
+  for the registry lock, against 5 s for writes, and a hook that cannot take
+  it in time allows the command it was asked about. A stalled writer must
+  never freeze an agent's session.
 
 ## What harbormaster does not guarantee
 
@@ -63,9 +99,12 @@ supervisor, and signal handling in `kill`/`release`.
   (`TMUX_PANE`, `ITERM_SESSION_ID`, `TERM_SESSION_ID`, or the parent pid) --
   it identifies a shell, not a secret, and anyone in the same shell or with
   the same parent pid can reproduce it.
-- **It relies on external tools from `$PATH`**: `ps` (process owner), `lsof`
-  (which pid holds a port), and `git` (repo, worktree, branch). If `$PATH` is
-  under someone else's control, so are those answers.
+- **The answers still come from external programs.** `ps` says who owns a pid
+  and when it started, `lsof` says which pid holds a port, `git` says where
+  you are. They are resolved to fixed absolute paths and run with a pinned
+  environment (see above), but `lsof` and `git` may still be found through an
+  absolute `$PATH` entry when they live nowhere standard. On a machine where
+  someone else can write to that directory, they decide those answers.
 - **File modes are only as good as the directory you point it at.** They are
   enforced for a state directory harbormaster created. A pre-existing
   directory is never re-chmodded: if it is a symlink, group- or

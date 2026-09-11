@@ -89,7 +89,7 @@ The registry file is the single source of truth. Every command reads it, prunes 
 **Invariants:**
 
 - Every read prunes. An entry is dead when its pid is gone **or** its port is not listening on two consecutive probes 100 ms apart (after the listen grace). Both are checked to guard against pid reuse. Pruned entries are appended to `history.jsonl` with a `reason` field.
-- Every write is: acquire `flock` → read → prune → mutate → write to temp file → `rename` over `registry.json`. Lock held for the whole sequence. Lock wait timeout 5 s, then fail loudly.
+- Every write is: acquire `flock` → read → prune → mutate → write to temp file → `rename` over `registry.json`. Lock held for the whole sequence. Lock wait timeout 5 s for writes and 1 s for reads (`Peek`, `history`, hook decisions -- a stalled writer must make a hook fail fast, not hang), then fail loudly.
 - `agent` and `session` come from the environment, resolved in order: `HARBORMASTER_AGENT` (+ `HARBORMASTER_SESSION`) explicit override → `HARBORMASTER_SESSION` alone (agent `human`) → `CLAUDE_CODE_SESSION_ID` (agent `claude`) → `CLAUDE_SESSION_ID` (agent `claude`, back-compat) → else agent `human` with a stable per-shell fallback session (`tmux:`/`iterm:`/`term:` from the matching terminal variable, else `shell:<parent pid>`). Cursor and Codex equivalents are added in a later plan. All session values are sanitized.
 - `repo` is the parent of `git rev-parse --git-common-dir` (shared across worktrees). `worktree` is `git rev-parse --show-toplevel`. Both optional; the tool works outside git with `repo`/`worktree` empty.
 - `history.jsonl` is capped at 1000 lines, oldest trimmed on write.
