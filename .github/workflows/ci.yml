@@ -33,6 +33,7 @@ jobs:
       - run: go vet ./...
       - run: make test
       - run: make coverage-check
+      - run: make smoke
       - run: go run golang.org/x/vuln/cmd/govulncheck@v1.8.0 ./...
 
   lint:

@@ -3,6 +3,7 @@
 1. Open an issue before large changes.
 2. Fork, branch from `main`, keep PRs focused.
 3. `make test lint coverage-check` must pass. CI enforces the same.
+   `python3` is needed only for `make smoke`.
 4. Tests first. Every behavior change needs a test.
 5. Dependencies: cobra, oklog/ulid, golang.org/x/sys only. Adding one needs
    justification in the PR.
