@@ -12,13 +12,25 @@ Not affiliated with Phabricator's Harbormaster.
 
 ## Install
 
-    go install github.com/moeritze/harbormaster/cmd/harbormaster@main
+Homebrew (macOS, Linux):
 
-There is no tagged release yet, so `@main` builds the current tip. Tagged,
-signed releases (cosign keyless, SBOM, SLSA provenance) are planned; pin a
-commit with `@<commit>` if you want a fixed build today.
+    brew install --cask moeritze/tap/harbormaster
 
-`make install` also links `hm` as a short alias.
+Go toolchain, pinned to a tagged release:
+
+    go install github.com/moeritze/harbormaster/cmd/harbormaster@v0.1.0
+
+Or download an archive from the [releases page](https://github.com/moeritze/harbormaster/releases). Every release ships `checksums.txt`, a Sigstore bundle for it, an SBOM per archive, and SLSA v1 provenance. Verify before you trust a download:
+
+    cosign verify-blob --bundle checksums.txt.sigstore.json \
+      --certificate-identity-regexp '^https://github.com/moeritze/harbormaster/' \
+      --certificate-oidc-issuer https://token.actions.githubusercontent.com checksums.txt
+    sha256sum -c checksums.txt --ignore-missing
+    slsa-verifier verify-artifact harbormaster_*_darwin_arm64.tar.gz \
+      --provenance-path harbormaster.intoto.jsonl \
+      --source-uri github.com/moeritze/harbormaster --source-tag v0.1.0
+
+`go install …@main` builds the unsigned tip of `main`; use it only for development. `make install` from a checkout also links `hm` as a short alias.
 
 ## Usage
 
