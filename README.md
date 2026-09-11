@@ -83,6 +83,17 @@ an existing one. A directory group or other can write is refused with the
 refused outright -- move the state dir or set `HARBORMASTER_HOME` to one you
 own.
 
+## Claude Code integration
+
+    harbormaster install claude            # user-level: ~/.claude/settings.json + ~/.claude/skills/harbormaster
+    harbormaster install claude --project . # per-repo: .claude/settings.json + .claude/skills/harbormaster
+    harbormaster install claude --dry-run  # show what would change
+    harbormaster uninstall claude          # remove exactly what was added
+
+What the hooks do: at session start Claude sees the registry and this worktree's port; before a shell command, a `kill`/`pkill`/`lsof -ti | xargs kill` aimed at a port another session owns is denied with the owner shown, and an unwrapped `npm run dev`-style start gets a nudge (`HARBORMASTER_STRICT=1` denies it); at session end the session's own servers are released and stopped. Hooks always fail open: any internal error allows the command and logs to `$HARBORMASTER_HOME/hook-errors.log`.
+
+The same files are available as a plugin in `adapters/claude-plugin/` (`claude --plugin-dir adapters/claude-plugin`).
+
 ## Security
 
 See SECURITY.md, including what harbormaster explicitly does not guarantee:
