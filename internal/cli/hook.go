@@ -10,6 +10,7 @@ import (
 	"github.com/moeritze/harbormaster/internal/app"
 	"github.com/moeritze/harbormaster/internal/hooks"
 	"github.com/moeritze/harbormaster/internal/hooks/adapters/claude"
+	"github.com/moeritze/harbormaster/internal/hooks/adapters/cursor"
 )
 
 // newHook is the hidden agent-hook entrypoint: `harbormaster hook <agent>
@@ -59,6 +60,26 @@ func newHook(a *app.App) *cobra.Command {
 					return nil
 				}
 				if out := claude.Format(event, core.Handle(ev)); out != nil {
+					_, _ = a.Stdout.Write(append(out, '\n'))
+				}
+				return nil
+			case "cursor":
+				ev, ok, err := cursor.Parse(event, payload)
+				if err != nil {
+					core.Logf("hook %s %s: %v", agent, event, err)
+					return nil
+				}
+				if !ok {
+					return nil
+				}
+				res := core.Handle(ev)
+				var out []byte
+				if event == "sessionStart" {
+					out = cursor.FormatSession(event, ev.Session, res)
+				} else {
+					out = cursor.Format(event, res)
+				}
+				if out != nil {
 					_, _ = a.Stdout.Write(append(out, '\n'))
 				}
 				return nil
