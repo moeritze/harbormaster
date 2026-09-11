@@ -76,6 +76,15 @@ func (c *Core) scoped(ev Event) (*app.App, error) {
 	return &a, nil
 }
 
+// Logf writes one diagnostic line to the hook's error log (or c.Log, if
+// set). Exported so callers outside the package — the `hook` CLI command,
+// for payload failures that happen before an Event can even be constructed
+// (unreadable stdin, a malformed payload, an unknown agent) — can record
+// them the same way Handle records its own internal errors.
+func (c *Core) Logf(format string, args ...any) {
+	c.logf(format, args...)
+}
+
 func (c *Core) logf(format string, args ...any) {
 	w := c.Log
 	if w == nil {
