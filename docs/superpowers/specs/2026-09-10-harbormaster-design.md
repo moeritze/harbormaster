@@ -70,14 +70,14 @@ The registry file is the single source of truth. Every command reads it, prunes 
       "port": 3417,
       "pid": 48213,
       "cmd": "npm run dev",
-      "repo": "/Users/m/repositories/riftbinder",
-      "worktree": "/Users/m/repositories/riftbinder-wt/auth-feature",
+      "repo": "/home/alice/src/myapp",
+      "worktree": "/home/alice/src/myapp-wt/auth-feature",
       "branch": "feat/auth",
       "agent": "claude",
-      "session": "session_0132...",
+      "session": "session_01ABC...",
       "label": "auth feature login flow",
       "started_at": "2026-09-10T17:13:00Z",
-      "host_user": "moritzroeseler",
+      "host_user": "alice",
       "spawned": true
     }
   ]
@@ -141,7 +141,7 @@ Removes entries without killing unless `--kill` is given. `--session ID` release
 Human-readable table by default. `--json` everywhere for hooks and agents. Errors go to stderr as a single actionable line, for example:
 
 ```
-port 3000 owned by claude session 0132… in ../riftbinder-wt/auth ("login flow", 12m). Run `harbormaster port` for this worktree's port.
+port 3000 owned by claude session 0132… in ../myapp-wt/auth ("login flow", 12m). Run `harbormaster port` for this worktree's port.
 ```
 
 Exit codes: 0 ok, 1 foreign/denied, 2 unregistered conflict, 3 usage error, 4 registry/lock error.
