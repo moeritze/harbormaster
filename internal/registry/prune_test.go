@@ -59,3 +59,50 @@ func TestPruneRemovesDeadPidAndClosedPortAfterGrace(t *testing.T) {
 		t.Fatalf("history reasons: %v", reasons)
 	}
 }
+
+// flappingProber fails the first PortListening call for flapPort and answers
+// true on every call after that: a dev server that refuses one connection
+// while it is busy, then serves normally.
+type flappingProber struct {
+	flapPort int
+	calls    map[int]int
+}
+
+func (f *flappingProber) PidAlive(int) bool { return true }
+
+func (f *flappingProber) PortListening(port int) bool {
+	f.calls[port]++
+	return port != f.flapPort || f.calls[port] != 1
+}
+
+// TestPruneKeepsEntryThatFailsOnlyTheFirstProbe covers the two-probe rule:
+// one failed dial must never prune a live entry.
+func TestPruneKeepsEntryThatFailsOnlyTheFirstProbe(t *testing.T) {
+	now := fixedNow()
+	p := &flappingProber{flapPort: 3100, calls: map[int]int{}}
+	s, err := registry.Open(filepath.Join(t.TempDir(), "hm"), p, func() time.Time { return now })
+	if err != nil {
+		t.Fatal(err)
+	}
+	seedStore, err := registry.Open(s.Dir(), alwaysAlive{}, func() time.Time { return now })
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := seedStore.Update(func(f *registry.File) error {
+		f.Entries = []registry.Entry{{ID: "flap", Port: 3100, PID: 10, StartedAt: now.Add(-time.Hour)}}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	f, err := s.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(f.Entries) != 1 || f.Entries[0].ID != "flap" {
+		t.Fatalf("entry pruned after a single failed probe: %+v", f.Entries)
+	}
+	if p.calls[3100] < 2 {
+		t.Fatalf("expected a second probe, got %d call(s)", p.calls[3100])
+	}
+}
