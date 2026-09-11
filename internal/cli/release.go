@@ -75,8 +75,3 @@ func newRelease(a *app.App) *cobra.Command {
 	cmd.Flags().BoolVar(&asJSON, "json", false, "machine-readable output")
 	return cmd
 }
-
-// terminateEntry is implemented in Task 11 (runner.Terminate + Guard).
-//
-//nolint:unparam // stub until Task 11
-func terminateEntry(_ *app.App, _ registry.Entry) error { return nil }
