@@ -38,13 +38,12 @@ set -e
 HARBORMASTER_AGENT=claude HARBORMASTER_SESSION=A "$BIN" kill "$port" || fail "own kill failed"
 for _ in $(seq 1 50); do "$BIN" ls | grep -q "no registered servers" && break; sleep 0.1; done
 "$BIN" ls | grep -q "no registered servers" || fail "entry not removed after kill"
-# One shutdown, one history record. Which reason it carries depends on who
-# removed the entry first: for a `run`-supervised server the wrapper's own
-# prune usually gets there before kill does, so it reads pid_dead rather than
-# killed. What must never happen again is the same shutdown logged three times.
+# One shutdown, one history record, and it carries the reason of whoever
+# stopped the server: kill removed the entry before the wrapper's own prune
+# could claim it, so the record reads "killed".
 for _ in $(seq 1 50); do [[ "$("$BIN" history --json | grep -c '"reason"')" -ge 1 ]] && break; sleep 0.1; done
 records="$("$BIN" history --json | grep -c '"reason"')"
 [[ "$records" -eq 1 ]] || fail "expected 1 history record for one shutdown, got $records"
-"$BIN" history | grep -qE 'killed|exited|pid_dead' || fail "history missing the shutdown record"
+"$BIN" history | grep -q killed || fail "history missing the killed record"
 
 echo "SMOKE OK"
