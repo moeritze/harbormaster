@@ -29,8 +29,17 @@ func newRelease(a *app.App) *cobra.Command {
 			if port == 0 && session == "" && !allMine {
 				return exitf(ExitUsage, "specify a port, --session ID, or --all-mine")
 			}
+			// The port form and --all-mine both rest on ownership, so a
+			// caller with no session id owns nothing here (see
+			// requireSession). --session names an id explicitly and is
+			// checked per entry below.
+			if port != 0 || allMine {
+				if err := requireSession(a, force); err != nil {
+					return err
+				}
+			}
 			var removed []registry.Entry
-			err := a.Store.Update(func(f *registry.File) error {
+			err := registryErr(a.Store.Update(func(f *registry.File) error {
 				kept := f.Entries[:0]
 				for _, e := range f.Entries {
 					match := (port != 0 && e.Port == port) ||
@@ -53,25 +62,34 @@ func newRelease(a *app.App) *cobra.Command {
 				}
 				f.Entries = kept
 				return nil
-			})
+			}))
 			if err != nil {
 				return err
 			}
+			// Every matched entry is dealt with before the first history
+			// failure is reported: the removals are already committed, so
+			// stopping half way would leave processes running that the
+			// registry no longer knows about. The failure still ends the
+			// command with the registry exit code.
+			var histErr error
 			for _, e := range removed {
 				if kill {
 					if err := terminateEntry(a, e); err != nil {
 						_, _ = fmt.Fprintf(a.Stderr, "warn: kill pid %d: %v\n", e.PID, err)
 					}
 				}
-				if err := a.Store.AppendHistory(registry.HistoryRecord{Entry: e, Reason: "released", At: a.Clock()}); err != nil {
-					_, _ = fmt.Fprintf(a.Stderr, "warn: history: %v\n", err)
+				if err := a.Store.AppendHistory(registry.HistoryRecord{Entry: e, Reason: "released", At: a.Clock()}); err != nil && histErr == nil {
+					histErr = err
 				}
 			}
 			if asJSON {
-				return writeJSON(a.Stdout, removed)
+				if err := writeJSON(a.Stdout, removed); err != nil {
+					return err
+				}
+			} else if _, err := fmt.Fprintf(a.Stdout, "released %d\n", len(removed)); err != nil {
+				return err
 			}
-			_, _ = fmt.Fprintf(a.Stdout, "released %d\n", len(removed))
-			return nil
+			return registryErr(histErr)
 		},
 	}
 	cmd.Flags().StringVar(&session, "session", "", "release every entry of this session id")

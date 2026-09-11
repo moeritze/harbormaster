@@ -39,7 +39,7 @@ func newClaim(a *app.App) *cobra.Command {
 				return exitf(ExitUsage, "pid %d is not running", pid)
 			}
 			var created registry.Entry
-			err = a.Store.Update(func(f *registry.File) error {
+			err = registryErr(a.Store.Update(func(f *registry.File) error {
 				if e, ok := findByPort(f, port); ok {
 					if ident.Owns(a.Ident, e, a.Git.Worktree) {
 						return exitf(ExitDenied, "port %d already registered by you (pid %d)", port, e.PID)
@@ -49,7 +49,7 @@ func newClaim(a *app.App) *cobra.Command {
 				created = newEntry(a, port, pid, fmt.Sprintf("claimed pid %d", pid), label)
 				f.Entries = append(f.Entries, created)
 				return nil
-			})
+			}))
 			if err != nil {
 				return err
 			}

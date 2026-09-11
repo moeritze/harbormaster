@@ -32,6 +32,9 @@ func newKill(a *app.App) *cobra.Command {
 			if !ok {
 				return exitf(ExitUnregistered, "port %d is not registered; harbormaster only kills servers it knows about", port)
 			}
+			if err := requireSession(a, force); err != nil {
+				return err
+			}
 			if !force && !ident.Owns(a.Ident, e, a.Git.Worktree) {
 				return exitf(ExitDenied, "port %d owned by %s. Use --force only if you are sure.", port, ownerLine(e, a.Clock()))
 			}
@@ -60,6 +63,20 @@ func newKill(a *app.App) *cobra.Command {
 	cmd.Flags().BoolVar(&force, "force", false, "kill even if owned by another session")
 	cmd.Flags().BoolVar(&asJSON, "json", false, "machine-readable output")
 	return cmd
+}
+
+// requireSession refuses write commands to a caller with no session id.
+// ident.Owns falls back to worktree equality for such a caller, which is the
+// right answer for the read-only conflict checks in check/ls/run, but as a
+// kill permission it would mean anyone who unsets HARBORMASTER_SESSION and
+// cd's into the right worktree can stop another session's server. Signalling
+// a process needs a positive claim of ownership, so the fallback does not
+// apply here: say who you are, or pass --force.
+func requireSession(a *app.App, force bool) error {
+	if force || a.Ident.Session != "" {
+		return nil
+	}
+	return exitf(ExitDenied, "no session id in the environment; set HARBORMASTER_SESSION or use --force")
 }
 
 // terminateEntry applies the safety guard, then terminates. Entries created by
