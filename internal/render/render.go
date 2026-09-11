@@ -94,12 +94,13 @@ func Table(w io.Writer, entries []registry.Entry, now time.Time) error {
 	_, _ = fmt.Fprintln(tw, "PORT\tPID\tAGENT\tSESSION\tWORKTREE\tBRANCH\tLABEL\tAGE")
 	for _, e := range entries {
 		_, _ = fmt.Fprintf(tw, "%d\t%d\t%s\t%s\t%s\t%s\t%s\t%s\n",
-			e.Port, e.PID, Text(e.Agent), Text(ShortSession(e.Session)), Text(e.Worktree), orDash(Text(e.Branch)), orDash(Text(e.Label)), Age(now, e.StartedAt))
+			e.Port, e.PID, Text(e.Agent), Text(ShortSession(e.Session)), Text(e.Worktree), OrDash(Text(e.Branch)), OrDash(Text(e.Label)), Age(now, e.StartedAt))
 	}
 	return tw.Flush()
 }
 
-func orDash(s string) string {
+// OrDash renders a blank or whitespace-only field as "-".
+func OrDash(s string) string {
 	if strings.TrimSpace(s) == "" {
 		return "-"
 	}

@@ -5,7 +5,6 @@ import (
 	"io"
 	"reflect"
 	"strconv"
-	"strings"
 	"time"
 
 	"github.com/moeritze/harbormaster/internal/registry"
@@ -16,9 +15,9 @@ import (
 // existing tests that assert on it keep compiling unchanged.
 const renderMax = 120
 
-// render, shortSession, shortPath, ownerLine, age, and writeTable are thin
-// wrappers over package render, which owns entry rendering (moved there so
-// hooks can share it without importing cli).
+// render, shortSession, shortPath, ownerLine, age, writeTable, and orDash are
+// thin wrappers over package render, which owns entry rendering (moved there
+// so hooks can share it without importing cli).
 func render(s string) string { return renderpkg.Text(s) }
 
 func shortSession(s string) string { return renderpkg.ShortSession(s) }
@@ -33,6 +32,8 @@ func writeTable(w io.Writer, entries []registry.Entry, now time.Time) error {
 	return renderpkg.Table(w, entries, now)
 }
 
+func orDash(s string) string { return renderpkg.OrDash(s) }
+
 // writeJSON encodes v as indented JSON. A nil slice encodes as an empty
 // array ([]) rather than JSON null, since machine consumers of --json
 // output expect an array even when the result set is empty.
@@ -44,13 +45,6 @@ func writeJSON(w io.Writer, v any) error {
 	enc := json.NewEncoder(w)
 	enc.SetIndent("", "  ")
 	return enc.Encode(v)
-}
-
-func orDash(s string) string {
-	if strings.TrimSpace(s) == "" {
-		return "-"
-	}
-	return s
 }
 
 func findByPort(f *registry.File, port int) (registry.Entry, bool) {

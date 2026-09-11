@@ -45,3 +45,43 @@ func TestTableAndOwnerLine(t *testing.T) {
 		t.Fatalf("%q", ol)
 	}
 }
+
+func TestAgeBuckets(t *testing.T) {
+	now := time.Date(2026, 9, 11, 12, 0, 0, 0, time.UTC)
+	cases := []struct {
+		name string
+		ago  time.Duration
+		want string
+	}{
+		{"under a minute", 10 * time.Second, "<1m"},
+		{"minutes", 12 * time.Minute, "12m"},
+		{"hours", 2*time.Hour + 5*time.Minute, "2h05m"},
+		{"days", 3 * 24 * time.Hour, "3d"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := render.Age(now, now.Add(-c.ago)); got != c.want {
+				t.Fatalf("Age(%v) = %q, want %q", c.ago, got, c.want)
+			}
+		})
+	}
+}
+
+func TestShortPathEmpty(t *testing.T) {
+	if got := render.ShortPath(""); got != "-" {
+		t.Fatalf("ShortPath(\"\") = %q, want %q", got, "-")
+	}
+}
+
+func TestOrDash(t *testing.T) {
+	cases := []struct{ in, want string }{
+		{"", "-"},
+		{"   ", "-"},
+		{"main", "main"},
+	}
+	for _, c := range cases {
+		if got := render.OrDash(c.in); got != c.want {
+			t.Fatalf("OrDash(%q) = %q, want %q", c.in, got, c.want)
+		}
+	}
+}
