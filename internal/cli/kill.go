@@ -38,20 +38,27 @@ func newKill(a *app.App) *cobra.Command {
 			if !force && !ident.Owns(a.Ident, e, a.Git.Worktree) {
 				return exitf(ExitDenied, "port %d owned by %s. Use --force only if you are sure.", port, ownerLine(e, a.Clock()))
 			}
-			if err := terminateEntry(a, e); err != nil {
+			if err := guardEntry(e); err != nil {
 				return exitf(ExitDenied, "%v", err)
 			}
+			// Remove and record BEFORE signalling. A `run`-supervised child
+			// is unregistered by its own wrapper the instant it dies, and
+			// that wrapper would otherwise win the race and log "exited"
+			// for a shutdown this command caused. The guard above already
+			// decided the signal may be sent; if it then fails, the entry
+			// is put back so the registry keeps describing a live process.
 			_, found, err := a.Store.Remove(e.ID)
 			if err != nil {
-				_, _ = fmt.Fprintf(a.Stderr, "warn: registry: %v\n", err)
+				return exitf(ExitRegistry, "registry: %v", err)
 			}
-			// Only whoever actually removed the entry logs it. A
-			// `run`-supervised child is unregistered by its own wrapper the
-			// moment it dies, and one shutdown should not leave two records.
 			if found {
 				if err := a.Store.AppendHistory(registry.HistoryRecord{Entry: e, Reason: "killed", At: a.Clock()}); err != nil {
 					_, _ = fmt.Fprintf(a.Stderr, "warn: history: %v\n", err)
 				}
+			}
+			if err := runner.Terminate(e.PID, e.Spawned, 10*time.Second); err != nil {
+				_ = a.Store.Update(func(f *registry.File) error { f.Entries = append(f.Entries, e); return nil })
+				return exitf(ExitDenied, "signal pid %d: %v", e.PID, err)
 			}
 			if asJSON {
 				return writeJSON(a.Stdout, e)
@@ -79,11 +86,17 @@ func requireSession(a *app.App, force bool) error {
 	return exitf(ExitDenied, "no session id in the environment; set HARBORMASTER_SESSION or use --force")
 }
 
+// guardEntry applies the safety guard (spec §10) to an entry about to be
+// signalled: never pid 1, never our own pid, never another user's process.
+func guardEntry(e registry.Entry) error {
+	return runner.Guard(e.PID, liveness.PidUID)
+}
+
 // terminateEntry applies the safety guard, then terminates. Entries created by
 // `run` own a process group and are signaled as one; every other entry (a
 // claimed pid, or a row written by an older build) is signaled individually.
 func terminateEntry(_ *app.App, e registry.Entry) error {
-	if err := runner.Guard(e.PID, liveness.PidUID); err != nil {
+	if err := guardEntry(e); err != nil {
 		return err
 	}
 	return runner.Terminate(e.PID, e.Spawned, 10*time.Second)
