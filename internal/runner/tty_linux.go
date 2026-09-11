@@ -1,6 +1,13 @@
 package runner
 
-import "golang.org/x/sys/unix"
+import (
+	"os"
 
-// ioctlReadTermios is the linux request that reads a tty's settings.
-const ioctlReadTermios = unix.TCGETS
+	"golang.org/x/sys/unix"
+)
+
+// stdinIsTerminal reports whether harbormaster's own stdin is a tty.
+func stdinIsTerminal() bool {
+	_, err := unix.IoctlGetTermios(int(os.Stdin.Fd()), unix.TCGETS)
+	return err == nil
+}
