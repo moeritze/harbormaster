@@ -470,3 +470,22 @@ func TestOpenAcceptsExistingPrivateDirUnchanged(t *testing.T) {
 		t.Fatalf("existing dir was re-chmodded to %o", st.Mode().Perm())
 	}
 }
+
+func TestPeekDoesNotPrune(t *testing.T) {
+	now := fixedNow()
+	dead := fakeProber{alive: map[int]bool{1: false}, listening: map[int]bool{}}
+	s, _ := registry.Open(filepath.Join(t.TempDir(), "hm"), dead, func() time.Time { return now })
+	seedStore, _ := registry.Open(s.Dir(), alwaysAlive{}, func() time.Time { return now })
+	_ = seedStore.Update(func(f *registry.File) error {
+		f.Entries = append(f.Entries, registry.Entry{ID: "d", Port: 3000, PID: 1, StartedAt: now.Add(-time.Hour)})
+		return nil
+	})
+	f, err := s.Peek()
+	if err != nil || len(f.Entries) != 1 {
+		t.Fatalf("peek should not prune: %v %+v", err, f)
+	}
+	g, _ := s.Load()
+	if len(g.Entries) != 0 {
+		t.Fatal("load should prune")
+	}
+}
