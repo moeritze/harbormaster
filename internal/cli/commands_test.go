@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -33,6 +34,7 @@ type harness struct {
 	out    *bytes.Buffer
 	prober *fakeProber
 	now    time.Time
+	stdin  io.Reader
 }
 
 //nolint:unparam // worktree is a fixed "/wt/a" for most of this suite; kept as a param for clarity at each call site
@@ -61,6 +63,7 @@ func newHarness(t *testing.T, session, worktree string) *harness {
 
 func (h *harness) run(args ...string) error {
 	h.out.Reset()
+	h.app.Stdin = h.stdin
 	root := cli.NewRoot(h.app)
 	root.SetArgs(args)
 	return root.Execute()
