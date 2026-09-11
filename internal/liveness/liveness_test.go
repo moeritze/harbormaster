@@ -98,3 +98,28 @@ func TestPidStartTimeSelf(t *testing.T) {
 		t.Fatalf("start time must be stable: %q vs %q", st, again)
 	}
 }
+
+// TestPidStartTimeIsLocaleIndependent pins the locale fix: a value captured
+// in a German locale and time zone must equal one captured under LC_ALL=C /
+// TZ=UTC. If it did not, an entry registered in one shell and killed from
+// another would look like a reused pid and the kill would be refused.
+func TestPidStartTimeIsLocaleIndependent(t *testing.T) {
+	t.Setenv("LC_ALL", "de_DE.UTF-8")
+	t.Setenv("LANG", "de_DE.UTF-8")
+	t.Setenv("TZ", "Europe/Berlin")
+	de, err := liveness.PidStartTime(os.Getpid())
+	if err != nil || de == "" {
+		t.Skip("PidStartTime unsupported here:", err)
+	}
+
+	t.Setenv("LC_ALL", "C")
+	t.Setenv("LANG", "C")
+	t.Setenv("TZ", "UTC")
+	c, err := liveness.PidStartTime(os.Getpid())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if de != c {
+		t.Fatalf("start time depends on the caller's locale: %q (de_DE/Berlin) vs %q (C/UTC)", de, c)
+	}
+}

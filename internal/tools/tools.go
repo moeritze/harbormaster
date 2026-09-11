@@ -8,6 +8,7 @@ package tools
 import (
 	"os"
 	"os/exec"
+	"path/filepath"
 	"sync"
 )
 
@@ -43,7 +44,15 @@ func resolve(name string) string {
 			return c
 		}
 	}
-	if p, err := exec.LookPath(name); err == nil {
+	// The $PATH fallback may only produce an ABSOLUTE path. A relative entry
+	// in $PATH (".", "bin", or an empty element) resolves against whatever
+	// directory harbormaster happens to be run from -- a directory the
+	// caller chooses -- which is exactly the "a shimmed ps decides whose pid
+	// this is" hole the fixed candidates above exist to close.
+	// exec.LookPath normally refuses such a hit with ErrDot, but
+	// GODEBUG=execerrdot=0 turns it back into a successful resolution, so
+	// the check is made here rather than left to the standard library.
+	if p, err := exec.LookPath(name); err == nil && filepath.IsAbs(p) {
 		return p
 	}
 	return ""
