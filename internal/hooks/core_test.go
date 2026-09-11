@@ -484,3 +484,21 @@ func TestClipCapsOnARuneBoundary(t *testing.T) {
 		t.Fatalf("len %d valid %v: %q…", len(got), utf8.ValidString(got), got[:20])
 	}
 }
+
+// TestQuarantineReachesTheHookLog: a hook has no terminal to warn on, so a
+// registry that had to be quarantined must be recorded where hook problems
+// are recorded. Otherwise the only notice of a destroyed registry would go
+// to the agent's plumbing and be lost.
+func TestQuarantineReachesTheHookLog(t *testing.T) {
+	x := newH(t)
+	if err := os.WriteFile(filepath.Join(x.st.Dir(), "registry.json"), []byte(`{"version":1,"entries":[`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	res := x.core.Handle(hooks.Event{Kind: hooks.SessionStart, Agent: "claude", Session: "s1", Cwd: "/wt/x"})
+	if res.Decision != hooks.Allow {
+		t.Fatalf("a quarantine must not stop the session: %+v", res)
+	}
+	if !strings.Contains(x.log.String(), "registry:") || !strings.Contains(x.log.String(), "moved it to") {
+		t.Fatalf("expected the quarantine in the hook log, got %q", x.log.String())
+	}
+}

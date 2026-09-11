@@ -71,10 +71,25 @@ func Run(ctx context.Context, a *app.App, opts Options, register Register) (int,
 	// Terminate must race a concurrent Wait rather than an unreaped zombie.
 	// alive(pid) cannot tell a zombie from a live process, so without this
 	// the register-failure path would burn the full KillTimeout every time.
+	//
+	// The group sweep that follows a natural exit happens HERE -- after
+	// Wait returns, before the reap is published -- rather than in the
+	// select below. Spec §6.1 step 5 ("on exit or on a signal, terminate
+	// the process group") applies to a leader that exited on its own too,
+	// so a dev server's workers (Next.js, vite) are not orphaned; but -pid
+	// only reliably names OUR group for as long as nothing else has been
+	// told the child is gone. Sweeping before the hand-off closes the
+	// window in which the rest of this process could run on while -pid came
+	// to mean an unrelated group. It stays cheap: the leader is already
+	// reaped, so kill(-pid, SIGTERM) either reaches surviving members or
+	// returns ESRCH, alive(pid) is false immediately, and none of
+	// KillTimeout is burned.
 	waitErr := make(chan error, 1)
 	done := make(chan struct{})
 	go func() {
-		waitErr <- cmd.Wait()
+		err := cmd.Wait()
+		_ = Terminate(pid, true, opts.KillTimeout)
+		waitErr <- err
 		close(done)
 	}()
 
@@ -94,18 +109,8 @@ func Run(ctx context.Context, a *app.App, opts Options, register Register) (int,
 
 	select {
 	case err := <-waitErr:
-		// The child exited on its own; spec §6.1 step 5 ("on exit or on a
-		// signal, terminate the process group") applies here too, so a dev
-		// server's worker processes (e.g. Next.js) don't get orphaned when
-		// only the leader exits. Best-effort and cheap in the common case:
-		// the leader is already reaped, so kill(-pid, SIGTERM) either
-		// reaches surviving group members or returns ESRCH, and alive(pid)
-		// is false immediately -- no KillTimeout is burned. There is a
-		// theoretical pid-reuse window between the leader exiting and this
-		// call where -pid could in principle now name an unrelated process
-		// group; the same risk is already accepted by the signal/ctx.Done
-		// path below.
-		_ = Terminate(pid, true, opts.KillTimeout)
+		// The child exited on its own and the wait goroutine already swept
+		// its group before handing the result over; nothing to signal here.
 		return exitCode(err), nil
 	case <-sigs:
 	case <-ctx.Done():

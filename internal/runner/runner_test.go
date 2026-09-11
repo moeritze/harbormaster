@@ -284,22 +284,52 @@ func TestTerminateKillsProcessGroup(t *testing.T) {
 }
 
 func TestCheckStartTime(t *testing.T) {
+	const single, group = false, true
 	same := func(int) (string, error) { return "t1", nil }
-	if err := runner.CheckStartTime(5, "t1", same); err != nil {
+	if err := runner.CheckStartTime(5, "t1", single, same); err != nil {
 		t.Fatalf("matching start time must pass: %v", err)
 	}
-	if err := runner.CheckStartTime(5, "t0", same); err == nil {
+	if err := runner.CheckStartTime(5, "t0", single, same); err == nil {
 		t.Fatal("different start time must be refused")
 	}
-	if err := runner.CheckStartTime(5, "", same); err != nil {
-		t.Fatal("empty stored value disables the check")
+	if err := runner.CheckStartTime(5, "", single, same); err != nil {
+		t.Fatal("a single-pid signal is still allowed without a stored value")
 	}
-	if err := runner.CheckStartTime(5, "t1", nil); err != nil {
+	if err := runner.CheckStartTime(5, "t1", single, nil); err != nil {
 		t.Fatal("nil lookup disables the check")
 	}
 	bad := func(int) (string, error) { return "", errors.New("no ps") }
-	if err := runner.CheckStartTime(5, "t1", bad); err == nil {
+	if err := runner.CheckStartTime(5, "t1", single, bad); err == nil {
 		t.Fatal("lookup failure must refuse (fail closed)")
+	}
+}
+
+// TestCheckStartTimeRefusesGroupWithoutStoredValue: signalling a process
+// GROUP with nothing to verify the pid against could take out every process
+// in whatever group holds that id now, so it is refused -- unless the
+// platform cannot report start times at all, where refusing would mean
+// refusing everything.
+func TestCheckStartTimeRefusesGroupWithoutStoredValue(t *testing.T) {
+	const group = true
+	available := func(int) (string, error) { return "t1", nil }
+	err := runner.CheckStartTime(5, "", group, available)
+	if !errors.Is(err, runner.ErrNoStartTime) {
+		t.Fatalf("expected ErrNoStartTime, got %v", err)
+	}
+	if !strings.Contains(err.Error(), "harbormaster ls") {
+		t.Fatalf("the message must name the repair: %v", err)
+	}
+
+	unavailable := func(int) (string, error) { return "", nil } // windows
+	if err := runner.CheckStartTime(5, "", group, unavailable); err != nil {
+		t.Fatalf("a platform without start times must not refuse everything: %v", err)
+	}
+	failing := func(int) (string, error) { return "", errors.New("no ps") }
+	if err := runner.CheckStartTime(5, "", group, failing); err != nil {
+		t.Fatalf("a failed lookup on an unrecorded entry must not refuse: %v", err)
+	}
+	if err := runner.CheckStartTime(5, "t1", group, available); err != nil {
+		t.Fatalf("a recorded, matching start time must still pass: %v", err)
 	}
 }
 
