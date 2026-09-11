@@ -1,3 +1,4 @@
+// Command harbormaster is the CLI entry point.
 package main
 
 import (
