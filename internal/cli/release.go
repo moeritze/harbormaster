@@ -12,7 +12,7 @@ import (
 
 func newRelease(a *app.App) *cobra.Command {
 	var session string
-	var allMine, force, kill bool
+	var allMine, force, kill, asJSON bool
 	cmd := &cobra.Command{
 		Use:   "release [port]",
 		Short: "Remove registry entries (yours by default)",
@@ -57,7 +57,12 @@ func newRelease(a *app.App) *cobra.Command {
 						_, _ = fmt.Fprintf(a.Stderr, "warn: kill pid %d: %v\n", e.PID, err)
 					}
 				}
-				_ = a.Store.AppendHistory(registry.HistoryRecord{Entry: e, Reason: "released", At: a.Clock()})
+				if err := a.Store.AppendHistory(registry.HistoryRecord{Entry: e, Reason: "released", At: a.Clock()}); err != nil {
+					_, _ = fmt.Fprintf(a.Stderr, "warn: history: %v\n", err)
+				}
+			}
+			if asJSON {
+				return writeJSON(a.Stdout, removed)
 			}
 			_, _ = fmt.Fprintf(a.Stdout, "released %d\n", len(removed))
 			return nil
@@ -67,6 +72,7 @@ func newRelease(a *app.App) *cobra.Command {
 	cmd.Flags().BoolVar(&allMine, "all-mine", false, "release every entry you own")
 	cmd.Flags().BoolVar(&force, "force", false, "release entries owned by others")
 	cmd.Flags().BoolVar(&kill, "kill", false, "also terminate the processes")
+	cmd.Flags().BoolVar(&asJSON, "json", false, "machine-readable output")
 	return cmd
 }
 

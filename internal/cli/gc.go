@@ -9,20 +9,25 @@ import (
 )
 
 func newGc(a *app.App) *cobra.Command {
-	return &cobra.Command{
+	var asJSON bool
+	cmd := &cobra.Command{
 		Use:   "gc",
 		Short: "Prune dead entries now",
 		RunE: func(_ *cobra.Command, _ []string) error {
-			before, err := a.Store.History(0)
+			pruned, err := a.Store.Prune()
 			if err != nil {
 				return exitf(ExitRegistry, "%v", err)
 			}
-			if _, err := a.Store.Load(); err != nil {
-				return exitf(ExitRegistry, "%v", err)
+			if asJSON {
+				return writeJSON(a.Stdout, pruned)
 			}
-			after, _ := a.Store.History(0)
-			_, _ = fmt.Fprintf(a.Stdout, "pruned %d\n", len(after)-len(before))
+			_, _ = fmt.Fprintf(a.Stdout, "pruned %d\n", len(pruned))
+			for _, r := range pruned {
+				_, _ = fmt.Fprintf(a.Stdout, "%d\t%s\t%s\n", r.Port, r.Reason, orDash(r.Worktree))
+			}
 			return nil
 		},
 	}
+	cmd.Flags().BoolVar(&asJSON, "json", false, "machine-readable output")
+	return cmd
 }
