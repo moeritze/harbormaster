@@ -12,18 +12,16 @@ Not affiliated with Phabricator's Harbormaster.
 
 ## Install
 
-Homebrew (macOS, Linux):
-
-    brew install --cask moeritze/tap/harbormaster
+Homebrew cask: coming with the first release that publishes to `moeritze/homebrew-tap` (requires the maintainer's tap token). Until then use `go install` or the signed archives below.
 
 Go toolchain, pinned to a tagged release:
 
     go install github.com/moeritze/harbormaster/cmd/harbormaster@v0.1.0
 
-Or download an archive from the [releases page](https://github.com/moeritze/harbormaster/releases). Every release ships `checksums.txt`, a Sigstore bundle for it, an SBOM per archive, and SLSA v1 provenance. Verify before you trust a download:
+Or download an archive from the [releases page](https://github.com/moeritze/harbormaster/releases). Every release ships `checksums.txt`, a Sigstore bundle for it, an SBOM per archive, and SLSA v1 provenance. Verify before you trust a download (requires cosign v3 or newer; older cosign needs `--new-bundle-format`):
 
     cosign verify-blob --bundle checksums.txt.sigstore.json \
-      --certificate-identity-regexp '^https://github.com/moeritze/harbormaster/' \
+      --certificate-identity-regexp '^https://github\.com/moeritze/harbormaster/\.github/workflows/release\.yml@refs/tags/v' \
       --certificate-oidc-issuer https://token.actions.githubusercontent.com checksums.txt
     sha256sum -c checksums.txt --ignore-missing
     slsa-verifier verify-artifact harbormaster_*_darwin_arm64.tar.gz \
