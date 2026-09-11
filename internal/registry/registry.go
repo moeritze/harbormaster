@@ -9,6 +9,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strconv"
 	"time"
 )
 
@@ -71,6 +72,15 @@ type Store struct {
 	// means os.Stderr.
 	Warn   io.Writer
 	warned bool
+	// StartTimeOf reports when a pid started, so pruning can backfill an
+	// entry that has no recorded start time (written by an older build, or
+	// by a registration whose lookup failed). "" means "cannot tell", which
+	// leaves the entry as it is. Defaults to the platform lookup; tests
+	// replace it.
+	StartTimeOf func(pid int) string
+	// ProbeBudget bounds the wall time one prune may spend dialing ports.
+	// Zero means defaultProbeBudget.
+	ProbeBudget time.Duration
 }
 
 // Open creates dir with mode 0700 if it does not exist yet, validates it,
@@ -94,7 +104,7 @@ func Open(dir string, p Prober, now func() time.Time) (*Store, error) {
 	if now == nil {
 		now = func() time.Time { return time.Now().UTC() }
 	}
-	return &Store{dir: dir, prober: p, now: now}, nil
+	return &Store{dir: dir, prober: p, now: now, StartTimeOf: defaultStartTimeOf}, nil
 }
 
 // validateStateDir refuses a state directory harbormaster cannot trust: a
@@ -138,7 +148,15 @@ func (s *Store) Dir() string { return s.dir }
 
 func (s *Store) path(name string) string { return filepath.Join(s.dir, name) }
 
-// Load reads, prunes, and (only if anything was pruned) writes back.
+// Load reads, prunes, and (if anything was pruned or repaired) writes back.
+//
+// A start time backfilled by this call is persisted but NOT reflected in the
+// document returned: reading a pid's start time now says nothing about
+// whether that pid was already reused before the read, so it does not turn
+// an unverifiable entry into a verified one for the very command that
+// repaired it. The repair counts from the next read on, which is what makes
+// `harbormaster ls` a deliberate step a user takes -- and sees the entry
+// during -- before harbormaster will signal that entry's process group.
 func (s *Store) Load() (*File, error) {
 	unlock, err := lock(s.path(lockName), lockTimeout)
 	if err != nil {
@@ -146,17 +164,20 @@ func (s *Store) Load() (*File, error) {
 	}
 	defer unlock()
 
-	f, pruned, err := s.readPruned()
+	f, pruned, filled, err := s.readPruned()
 	if err != nil {
 		return nil, err
 	}
-	if len(pruned) > 0 {
+	if len(pruned) > 0 || len(filled) > 0 {
 		if err := s.commit(f, pruned); err != nil {
 			return nil, err
 		}
 	}
 	cp := *f
 	cp.Entries = append([]Entry(nil), f.Entries...)
+	for _, i := range filled {
+		cp.Entries[i].StartTime = ""
+	}
 	return &cp, nil
 }
 
@@ -185,11 +206,11 @@ func (s *Store) Prune() ([]HistoryRecord, error) {
 	}
 	defer unlock()
 
-	f, pruned, err := s.readPruned()
+	f, pruned, filled, err := s.readPruned()
 	if err != nil {
 		return nil, err
 	}
-	if len(pruned) > 0 {
+	if len(pruned) > 0 || len(filled) > 0 {
 		if err := s.commit(f, pruned); err != nil {
 			return nil, err
 		}
@@ -205,7 +226,7 @@ func (s *Store) Update(fn func(f *File) error) error {
 	}
 	defer unlock()
 
-	f, pruned, err := s.readPruned()
+	f, pruned, _, err := s.readPruned()
 	if err != nil {
 		return err
 	}
@@ -244,7 +265,7 @@ func (s *Store) Remove(id string) (Entry, bool, error) {
 		kept = append(kept, e)
 	}
 	f.Entries = kept
-	pruned := s.prune(f)
+	pruned, _ := s.prune(f)
 	if err := s.commit(f, pruned); err != nil {
 		return Entry{}, false, err
 	}
@@ -254,14 +275,16 @@ func (s *Store) Remove(id string) (Entry, bool, error) {
 // readPruned reads the document and prunes it in memory. It is side-effect
 // free: nothing is written to registry.json or history.jsonl. Must be
 // called with the lock held. The caller is responsible for calling commit
-// to persist both the pruned document and the pruned records.
-func (s *Store) readPruned() (*File, []HistoryRecord, error) {
+// to persist both the pruned document and the pruned records. filled lists
+// the surviving entries whose start time was backfilled in memory: the
+// document must be written back for them even when nothing was pruned.
+func (s *Store) readPruned() (*File, []HistoryRecord, []int, error) {
 	f, err := s.read()
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
-	pruned := s.prune(f)
-	return f, pruned, nil
+	pruned, filled := s.prune(f)
+	return f, pruned, filled, nil
 }
 
 // commit persists f and then, only once that succeeds, appends each pruned
@@ -297,7 +320,12 @@ func (s *Store) read() (*File, error) {
 		return s.quarantine(fmt.Errorf("parse registry: %w", err))
 	}
 	if f.Version != SchemaVersion {
-		return s.quarantine(fmt.Errorf("registry schema version %d not supported (want %d)", f.Version, SchemaVersion))
+		// NOT quarantined. A version this build does not know is a file
+		// written by a build that knows more than this one -- most likely a
+		// newer harbormaster the user also runs. Moving it aside would
+		// destroy that build's live registry and orphan every process in
+		// it, so an unsupported version fails closed and the user decides.
+		return nil, fmt.Errorf("registry schema version %d not supported (want %d)", f.Version, SchemaVersion)
 	}
 	if f.Entries == nil {
 		f.Entries = []Entry{}
@@ -305,15 +333,27 @@ func (s *Store) read() (*File, error) {
 	return &f, nil
 }
 
-// quarantine moves a registry.json this build cannot read out of the way
-// and continues from an empty document. Before this, one damaged file (a
-// crashed writer, a newer schema, a stray edit) made every command exit 4
-// with no way back short of deleting the file by hand. The damaged copy is
-// kept next to the registry for inspection; the warning is printed once
-// per process. Must be called with the lock held.
+// quarantine moves a registry.json that is not valid JSON out of the way and
+// continues from an empty document. Before this, one damaged file (a crashed
+// writer, a stray edit) made every command exit 4 with no way back short of
+// deleting the file by hand. Only a PARSE failure gets here: an unsupported
+// schema version is a readable file this build simply does not own, and
+// read() fails closed on it instead.
+//
+// The damaged copy is kept next to the registry for inspection under a
+// nanosecond-stamped name created with O_EXCL, so two processes quarantining
+// at the same moment cannot overwrite each other's evidence. The event is
+// reported three ways: the warning writer (stderr by default), a
+// "quarantined" record in history.jsonl naming the copy, and -- when a hook
+// installed a writer -- the hook error log. Must be called with the lock
+// held.
 func (s *Store) quarantine(cause error) (*File, error) {
-	moved := fmt.Sprintf("%s.corrupt-%d", s.path(fileName), s.now().Unix())
+	moved, err := s.reserveQuarantineName()
+	if err != nil {
+		return nil, fmt.Errorf("%v; and could not quarantine it: %w", cause, err)
+	}
 	if err := os.Rename(s.path(fileName), moved); err != nil {
+		_ = os.Remove(moved)
 		return nil, fmt.Errorf("%v; and could not quarantine it: %w", cause, err)
 	}
 	if !s.warned {
@@ -324,7 +364,30 @@ func (s *Store) quarantine(cause error) (*File, error) {
 		}
 		_, _ = fmt.Fprintf(w, "harbormaster: warning: %v; moved it to %s and started an empty registry\n", cause, moved)
 	}
+	// The history record is what a later `harbormaster history` (or a human
+	// reading the file) can see; a failure to write it must not turn a
+	// recoverable registry back into a hard failure.
+	_ = s.appendHistoryLocked(HistoryRecord{Entry: Entry{Label: moved}, Reason: "quarantined", At: s.now()})
 	return &File{Version: SchemaVersion, Entries: []Entry{}}, nil
+}
+
+// reserveQuarantineName creates an empty file at registry.json.corrupt-<ns>
+// with O_EXCL and returns its path. Reserving the name first means the
+// rename below can only ever land on a name this process owns.
+func (s *Store) reserveQuarantineName() (string, error) {
+	base := s.path(fileName) + ".corrupt-"
+	stamp := s.now().UnixNano()
+	for i := 0; i < 100; i++ {
+		name := base + strconv.FormatInt(stamp+int64(i), 10)
+		fh, err := os.OpenFile(name, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600) //nolint:gosec // path derives from the trusted state dir
+		if err == nil {
+			return name, fh.Close()
+		}
+		if !errors.Is(err, os.ErrExist) {
+			return "", err
+		}
+	}
+	return "", fmt.Errorf("no free quarantine name next to %s", s.path(fileName))
 }
 
 func (s *Store) write(f *File) error {
@@ -375,7 +438,11 @@ func (s *Store) atomicWrite(name, pattern string, data []byte) error {
 	return nil
 }
 
-// prune is replaced with real logic in prune.go (Task 5). Returns pruned records.
-func (s *Store) prune(f *File) []HistoryRecord {
-	return pruneEntries(f, s.prober, s.now())
+// prune removes dead entries (see prune.go). It returns the pruned records
+// and the indices of surviving entries it repaired in place.
+func (s *Store) prune(f *File) ([]HistoryRecord, []int) {
+	return pruneEntries(f, s.prober, s.now(), pruneOptions{
+		startTimeOf: s.StartTimeOf,
+		budget:      s.ProbeBudget,
+	})
 }

@@ -59,7 +59,9 @@ func TestLoadEmptyReturnsVersion1(t *testing.T) {
 func TestUpdatePersistsAndFileMode0600(t *testing.T) {
 	s := open(t)
 	err := s.Update(func(f *registry.File) error {
-		f.Entries = append(f.Entries, registry.Entry{ID: "a", Port: 3000, PID: 1, StartedAt: fixedNow()})
+		// StartTime is set so pruning has nothing to backfill either: this
+		// test is about a read with nothing at all to change.
+		f.Entries = append(f.Entries, registry.Entry{ID: "a", Port: 3000, PID: 1, StartedAt: fixedNow(), StartTime: "recorded"})
 		return nil
 	})
 	if err != nil {
@@ -116,7 +118,9 @@ func TestRemove(t *testing.T) {
 func TestLoadDoesNotRewriteWhenNothingPruned(t *testing.T) {
 	s := open(t)
 	if err := s.Update(func(f *registry.File) error {
-		f.Entries = append(f.Entries, registry.Entry{ID: "a", Port: 3000, PID: 1, StartedAt: fixedNow()})
+		// StartTime is set so pruning has nothing to backfill either: this
+		// test is about a read with nothing at all to change.
+		f.Entries = append(f.Entries, registry.Entry{ID: "a", Port: 3000, PID: 1, StartedAt: fixedNow(), StartTime: "recorded"})
 		return nil
 	}); err != nil {
 		t.Fatal(err)
@@ -298,35 +302,90 @@ func TestPrunePrunesAndReturnsRecords(t *testing.T) {
 	}
 }
 
-func TestLoadQuarantinesUnknownVersionAndCorruptFile(t *testing.T) {
-	for _, content := range []string{`{"version":99,"entries":[]}`, `{"version":1,"entries":[`} {
-		s := open(t)
-		var warn bytes.Buffer
-		s.Warn = &warn
-		if err := os.WriteFile(filepath.Join(s.Dir(), "registry.json"), []byte(content), 0o600); err != nil {
+// TestLoadRejectsUnknownVersion pins the quarantine's scope: a registry this
+// build cannot read because it was written by a build that knows a NEWER
+// schema is somebody's live state. Moving it aside would orphan every
+// process in it, so the read fails closed and the user decides.
+func TestLoadRejectsUnknownVersion(t *testing.T) {
+	s := open(t)
+	var warn bytes.Buffer
+	s.Warn = &warn
+	const content = `{"version":99,"entries":[]}`
+	if err := os.WriteFile(filepath.Join(s.Dir(), "registry.json"), []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_, err := s.Load()
+	if err == nil || !strings.Contains(err.Error(), "not supported") {
+		t.Fatalf("an unsupported schema version must fail closed, got %v", err)
+	}
+	if matches, _ := filepath.Glob(filepath.Join(s.Dir(), "registry.json.corrupt-*")); len(matches) != 0 {
+		t.Fatalf("an unsupported version must not be quarantined, found %v", matches)
+	}
+	if got, _ := os.ReadFile(filepath.Join(s.Dir(), "registry.json")); string(got) != content { //nolint:gosec // path is inside the test temp dir
+		t.Fatalf("the file must be left untouched, got %q", got)
+	}
+}
+
+// TestLoadQuarantinesCorruptFile covers the other half: a file that is not
+// JSON at all cannot be anyone's live state, so it is moved aside (with a
+// history record naming the copy) and work continues from empty.
+func TestLoadQuarantinesCorruptFile(t *testing.T) {
+	s := open(t)
+	var warn bytes.Buffer
+	s.Warn = &warn
+	const content = `{"version":1,"entries":[`
+	if err := os.WriteFile(filepath.Join(s.Dir(), "registry.json"), []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	f, err := s.Load()
+	if err != nil || len(f.Entries) != 0 {
+		t.Fatalf("expected an empty registry after quarantine, got %+v %v", f, err)
+	}
+	matches, _ := filepath.Glob(filepath.Join(s.Dir(), "registry.json.corrupt-*"))
+	if len(matches) != 1 {
+		t.Fatalf("expected one quarantined copy, got %v", matches)
+	}
+	if got, _ := os.ReadFile(matches[0]); string(got) != content { //nolint:gosec // path is inside the test temp dir
+		t.Fatal("quarantined copy must be byte-identical")
+	}
+	if !strings.Contains(warn.String(), "moved it to") {
+		t.Fatalf("expected a warning, got %q", warn.String())
+	}
+	// The event is recorded where a later reader can find it.
+	hist, err := s.History(0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(hist) != 1 || hist[0].Reason != "quarantined" || hist[0].Label != matches[0] {
+		t.Fatalf("expected a quarantined history record naming the copy, got %+v", hist)
+	}
+	// Writes work again and the warning prints once per process.
+	if err := s.Update(func(_ *registry.File) error { return nil }); err != nil {
+		t.Fatalf("registry must be usable after quarantine: %v", err)
+	}
+	if strings.Count(warn.String(), "moved it to") != 1 {
+		t.Fatalf("warning must print once, got %q", warn.String())
+	}
+}
+
+// TestQuarantineNamesDoNotCollide pins the nanosecond + O_EXCL naming: two
+// quarantines within the same second must not overwrite each other's
+// evidence (the name used to be a whole-second timestamp).
+func TestQuarantineNamesDoNotCollide(t *testing.T) {
+	s := open(t)
+	var warn bytes.Buffer
+	s.Warn = &warn
+	for i := 0; i < 2; i++ {
+		if err := os.WriteFile(filepath.Join(s.Dir(), "registry.json"), []byte(`{"version":1,`), 0o600); err != nil {
 			t.Fatal(err)
 		}
-		f, err := s.Load()
-		if err != nil || len(f.Entries) != 0 {
-			t.Fatalf("%q: expected an empty registry after quarantine, got %+v %v", content, f, err)
+		if _, err := s.Load(); err != nil {
+			t.Fatal(err)
 		}
-		matches, _ := filepath.Glob(filepath.Join(s.Dir(), "registry.json.corrupt-*"))
-		if len(matches) != 1 {
-			t.Fatalf("%q: expected one quarantined copy, got %v", content, matches)
-		}
-		if got, _ := os.ReadFile(matches[0]); string(got) != content {
-			t.Fatalf("%q: quarantined copy must be byte-identical", content)
-		}
-		if !strings.Contains(warn.String(), "moved it to") {
-			t.Fatalf("%q: expected a warning, got %q", content, warn.String())
-		}
-		// Writes now work again and warn only once per process.
-		if err := s.Update(func(_ *registry.File) error { return nil }); err != nil {
-			t.Fatalf("%q: registry must be usable after quarantine: %v", content, err)
-		}
-		if strings.Count(warn.String(), "moved it to") != 1 {
-			t.Fatalf("%q: warning must print once, got %q", content, warn.String())
-		}
+	}
+	matches, _ := filepath.Glob(filepath.Join(s.Dir(), "registry.json.corrupt-*"))
+	if len(matches) != 2 {
+		t.Fatalf("expected two distinct quarantined copies, got %v", matches)
 	}
 }
 
@@ -346,7 +405,9 @@ func TestWriteIgnoresPlantedTempSymlink(t *testing.T) {
 	}
 
 	if err := s.Update(func(f *registry.File) error {
-		f.Entries = append(f.Entries, registry.Entry{ID: "a", Port: 3000, PID: 1, StartedAt: fixedNow()})
+		// StartTime is set so pruning has nothing to backfill either: this
+		// test is about a read with nothing at all to change.
+		f.Entries = append(f.Entries, registry.Entry{ID: "a", Port: 3000, PID: 1, StartedAt: fixedNow(), StartTime: "recorded"})
 		return nil
 	}); err != nil {
 		t.Fatal(err)

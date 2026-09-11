@@ -1,6 +1,7 @@
 package registry_test
 
 import (
+	"fmt"
 	"path/filepath"
 	"testing"
 	"time"
@@ -104,5 +105,114 @@ func TestPruneKeepsEntryThatFailsOnlyTheFirstProbe(t *testing.T) {
 	}
 	if p.calls[3100] < 2 {
 		t.Fatalf("expected a second probe, got %d call(s)", p.calls[3100])
+	}
+}
+
+// TestPruneBackfillsMissingStartTime covers the repair path for entries that
+// carry no start time: a surviving entry gets one recorded and the registry
+// is written back even though nothing was pruned. Without this an entry
+// written by an older build could never be group-signalled again.
+func TestPruneBackfillsMissingStartTime(t *testing.T) {
+	now := fixedNow()
+	dir := filepath.Join(t.TempDir(), "hm")
+	seed, err := registry.Open(dir, alwaysAlive{}, func() time.Time { return now })
+	if err != nil {
+		t.Fatal(err)
+	}
+	seed.StartTimeOf = nil
+	if err := seed.Update(func(f *registry.File) error {
+		f.Entries = append(f.Entries,
+			registry.Entry{ID: "no-start", Port: 3000, PID: 42, StartedAt: now},
+			registry.Entry{ID: "has-start", Port: 3001, PID: 43, StartedAt: now, StartTime: "already"})
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	s, err := registry.Open(dir, alwaysAlive{}, func() time.Time { return now })
+	if err != nil {
+		t.Fatal(err)
+	}
+	var asked []int
+	s.StartTimeOf = func(pid int) string {
+		asked = append(asked, pid)
+		return fmt.Sprintf("start-%d", pid)
+	}
+	loaded, err := s.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(asked) != 1 || asked[0] != 42 {
+		t.Fatalf("only the entry without a start time may be looked up, asked %v", asked)
+	}
+	// The repair counts from the next read on: a start time read now says
+	// nothing about whether the pid was already reused before it was read,
+	// so the caller that triggered the repair still sees an unverified row.
+	for _, e := range loaded.Entries {
+		if e.ID == "no-start" && e.StartTime != "" {
+			t.Fatalf("the repairing read must still report the entry as unverified: %+v", e)
+		}
+	}
+
+	// The backfill must be persisted, not just applied in memory.
+	reader, err := registry.Open(dir, alwaysAlive{}, func() time.Time { return now })
+	if err != nil {
+		t.Fatal(err)
+	}
+	reader.StartTimeOf = nil
+	f, err := reader.Peek()
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]string{}
+	for _, e := range f.Entries {
+		got[e.ID] = e.StartTime
+	}
+	if got["no-start"] != "start-42" || got["has-start"] != "already" {
+		t.Fatalf("start times after backfill: %v", got)
+	}
+}
+
+// slowProber sleeps on every dial. Twenty stale entries need 1.9 s of
+// dialing without a budget (two passes of three waves plus the re-probe
+// delay), which is exactly what the budget exists to cut short.
+type slowProber struct{ dial time.Duration }
+
+func (slowProber) PidAlive(int) bool { return true }
+func (s slowProber) PortListening(int) bool {
+	time.Sleep(s.dial)
+	return false
+}
+
+// TestPruneStopsAtTheProbeBudget: the probe phase is bounded by wall time as
+// well as by count. Entries it could not reach stay untouched for the next
+// call rather than making this one hang.
+func TestPruneStopsAtTheProbeBudget(t *testing.T) {
+	now := fixedNow()
+	dir := filepath.Join(t.TempDir(), "hm")
+	seedStale(t, dir, now, 20)
+	s, err := registry.Open(dir, slowProber{dial: 300 * time.Millisecond}, func() time.Time { return now })
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.StartTimeOf = nil // keep the measurement about dialing only
+	s.ProbeBudget = time.Second
+
+	start := time.Now()
+	f, err := s.Load()
+	elapsed := time.Since(start)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Unbounded this takes ~1.9 s; bounded it takes the budget plus the one
+	// wave that was already in flight when it ran out.
+	if elapsed > 1600*time.Millisecond {
+		t.Fatalf("Load took %s; the probe budget did not bound it", elapsed)
+	}
+	if len(f.Entries) == 0 {
+		t.Fatal("entries that could not be probed within the budget must survive")
+	}
+	if len(f.Entries) == 20 {
+		t.Fatal("the entries that were probed within the budget must still be pruned")
 	}
 }
