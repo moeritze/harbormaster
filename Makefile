@@ -2,7 +2,7 @@ BIN := harbormaster
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
 LDFLAGS := -s -w -X github.com/moeritze/harbormaster/internal/cli.Version=$(VERSION)
 
-.PHONY: build test lint coverage-check smoke install clean
+.PHONY: build test lint coverage-check smoke install clean release-check release-dry
 
 build:
 	go build -trimpath -ldflags "$(LDFLAGS)" -o bin/$(BIN) ./cmd/harbormaster

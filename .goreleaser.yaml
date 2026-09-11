@@ -9,7 +9,8 @@ before:
   hooks:
     # Tests run in the ci workflow's test job (with -race); rerunning them here
     # only duplicates work and made the timing-sensitive tests flaky on CI.
-    - go mod tidy
+    - go mod download
+    - go mod verify
 
 builds:
   - id: harbormaster
@@ -70,9 +71,9 @@ homebrew_casks:
       owner: moeritze
       name: homebrew-tap
       branch: main
-      token: "{{ .Env.HOMEBREW_TAP_TOKEN }}"
+      token: '{{ envOrDefault "HOMEBREW_TAP_TOKEN" "" }}'
     # Skip the tap push when the secret is absent so a release never fails on it.
-    skip_upload: "{{ if .Env.HOMEBREW_TAP_TOKEN }}false{{ else }}true{{ end }}"
+    skip_upload: '{{ if envOrDefault "HOMEBREW_TAP_TOKEN" "" }}false{{ else }}true{{ end }}'
     commit_author:
       name: goreleaser
       email: noreply@goreleaser.com
@@ -117,7 +118,7 @@ release:
 
     ```sh
     cosign verify-blob --bundle checksums.txt.sigstore.json \
-      --certificate-identity-regexp '^https://github.com/moeritze/harbormaster/' \
+      --certificate-identity-regexp '^https://github\.com/moeritze/harbormaster/\.github/workflows/release\.yml@refs/tags/v' \
       --certificate-oidc-issuer https://token.actions.githubusercontent.com checksums.txt
     sha256sum -c checksums.txt --ignore-missing
     ```
