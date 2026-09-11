@@ -60,13 +60,18 @@ type Store struct {
 	now    func() time.Time
 }
 
-// Open ensures dir exists with mode 0700 and returns a Store.
+// Open creates dir with mode 0700 if it does not exist yet and returns a
+// Store. An existing directory is left exactly as the user set it up: every
+// command would otherwise silently re-chmod a directory the user may have
+// shared on purpose (a group-readable state dir, a symlinked home).
 func Open(dir string, p Prober, now func() time.Time) (*Store, error) {
-	if err := os.MkdirAll(dir, 0o700); err != nil {
-		return nil, fmt.Errorf("create state dir: %w", err)
-	}
-	if err := os.Chmod(dir, 0o700); err != nil { //nolint:gosec // 0700 is required (not permissive) for a directory: rwx for owner only
-		return nil, fmt.Errorf("chmod state dir: %w", err)
+	if _, err := os.Stat(dir); err != nil {
+		if !errors.Is(err, os.ErrNotExist) {
+			return nil, fmt.Errorf("state dir: %w", err)
+		}
+		if err := os.MkdirAll(dir, 0o700); err != nil {
+			return nil, fmt.Errorf("create state dir: %w", err)
+		}
 	}
 	if now == nil {
 		now = func() time.Time { return time.Now().UTC() }

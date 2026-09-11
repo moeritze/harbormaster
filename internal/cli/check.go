@@ -28,20 +28,25 @@ func newCheck(a *app.App) *cobra.Command {
 				return err
 			}
 			res, code := checkPort(a, port)
+			// --json is the machine contract: the document is always on
+			// stdout, and a non-zero result carries the exit code alone so
+			// main has no message to echo to stderr.
 			if asJSON {
 				if err := writeJSON(a.Stdout, res); err != nil {
 					return err
 				}
-			} else {
-				_, _ = fmt.Fprintf(a.Stdout, "port %d: %s", port, res.Status)
-				if res.Owner != "" {
-					_, _ = fmt.Fprintf(a.Stdout, " (%s)", res.Owner)
+				if code != ExitOK {
+					return &ExitError{Code: code}
 				}
-				_, _ = fmt.Fprintln(a.Stdout)
+				return nil
 			}
+			// Human output says it once: free and own print a line on
+			// stdout, everything else is the single actionable stderr line
+			// main prints for the returned ExitError.
 			if code != ExitOK {
 				return exitf(code, "port %d %s: %s", port, res.Status, res.Owner)
 			}
+			_, _ = fmt.Fprintf(a.Stdout, "port %d: %s\n", port, res.Status)
 			return nil
 		},
 	}

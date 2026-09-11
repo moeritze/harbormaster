@@ -116,10 +116,15 @@ func Run(ctx context.Context, a *app.App, opts Options, register Register) (int,
 }
 
 func unregister(a *app.App, e registry.Entry) {
-	if _, _, err := a.Store.Remove(e.ID); err != nil {
+	_, found, err := a.Store.Remove(e.ID)
+	if err != nil {
 		_, _ = fmt.Fprintf(a.Stderr, "warn: registry: %v\n", err)
 	}
-	_ = a.Store.AppendHistory(registry.HistoryRecord{Entry: e, Reason: "exited", At: a.Clock()})
+	// Only whoever actually removed the entry logs it: if `kill` got there
+	// first, this shutdown is already in history as "killed".
+	if found {
+		_ = a.Store.AppendHistory(registry.HistoryRecord{Entry: e, Reason: "exited", At: a.Clock()})
+	}
 }
 
 // warnIfNotListening watches the port until it starts listening, the child

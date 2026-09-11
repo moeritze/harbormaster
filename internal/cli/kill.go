@@ -14,7 +14,7 @@ import (
 )
 
 func newKill(a *app.App) *cobra.Command {
-	var force bool
+	var force, asJSON bool
 	cmd := &cobra.Command{
 		Use:   "kill <port>",
 		Short: "Stop the registered server on a port (yours only, unless --force)",
@@ -38,17 +38,27 @@ func newKill(a *app.App) *cobra.Command {
 			if err := terminateEntry(a, e); err != nil {
 				return exitf(ExitDenied, "%v", err)
 			}
-			if _, _, err := a.Store.Remove(e.ID); err != nil {
+			_, found, err := a.Store.Remove(e.ID)
+			if err != nil {
 				_, _ = fmt.Fprintf(a.Stderr, "warn: registry: %v\n", err)
 			}
-			if err := a.Store.AppendHistory(registry.HistoryRecord{Entry: e, Reason: "killed", At: a.Clock()}); err != nil {
-				_, _ = fmt.Fprintf(a.Stderr, "warn: history: %v\n", err)
+			// Only whoever actually removed the entry logs it. A
+			// `run`-supervised child is unregistered by its own wrapper the
+			// moment it dies, and one shutdown should not leave two records.
+			if found {
+				if err := a.Store.AppendHistory(registry.HistoryRecord{Entry: e, Reason: "killed", At: a.Clock()}); err != nil {
+					_, _ = fmt.Fprintf(a.Stderr, "warn: history: %v\n", err)
+				}
+			}
+			if asJSON {
+				return writeJSON(a.Stdout, e)
 			}
 			_, _ = fmt.Fprintf(a.Stdout, "killed pid %d on port %d\n", e.PID, port)
 			return nil
 		},
 	}
 	cmd.Flags().BoolVar(&force, "force", false, "kill even if owned by another session")
+	cmd.Flags().BoolVar(&asJSON, "json", false, "machine-readable output")
 	return cmd
 }
 
