@@ -25,6 +25,15 @@ func TestConfigDefaultsAndOverrides(t *testing.T) {
 	if _, err := ports.ConfigFromEnv(env(map[string]string{"HARBORMASTER_RANGE": "0"})); err == nil {
 		t.Fatal("expected error on zero range")
 	}
+	if _, err := ports.ConfigFromEnv(env(map[string]string{"HARBORMASTER_RANGE": "9223372036854775807"})); err == nil {
+		t.Fatal("expected error on range exceeding 65535")
+	}
+	if _, err := ports.ConfigFromEnv(env(map[string]string{"HARBORMASTER_BASE": "65000", "HARBORMASTER_RANGE": "1000"})); err == nil {
+		t.Fatal("expected error on window exceeding 65535")
+	}
+	if _, err := ports.ConfigFromEnv(env(map[string]string{"HARBORMASTER_BASE": "70000"})); err == nil {
+		t.Fatal("expected error on base exceeding 65535")
+	}
 }
 
 func TestDeterministicStableAndInRange(t *testing.T) {
@@ -45,16 +54,30 @@ func TestDeterministicStableAndInRange(t *testing.T) {
 func TestResolveProbesUpwardWithinRange(t *testing.T) {
 	c := ports.Config{Base: 3000, Range: 5}
 	want := ports.Deterministic("k", c)
-	taken := map[int]bool{want: true}
+	// Mark every port from want through the end of the window as taken to force wraparound
+	taken := make(map[int]bool)
+	for p := want; p < c.Base+c.Range; p++ {
+		taken[p] = true
+	}
 	got, err := ports.Resolve("k", c, func(p int) bool { return taken[p] })
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got == want || got < 3000 || got >= 3005 {
-		t.Fatalf("got %d (deterministic %d)", got, want)
+	if got < c.Base || got >= want {
+		t.Fatalf("got %d (deterministic %d), expected wraparound to [%d, %d)", got, want, c.Base, want)
 	}
 	all := func(int) bool { return true }
 	if _, err := ports.Resolve("k", c, all); err == nil {
 		t.Fatal("expected exhaustion error")
+	}
+}
+
+func TestZeroRangeGuards(t *testing.T) {
+	c := ports.Config{Base: 3000}
+	if p := ports.Deterministic("x", c); p != 3000 {
+		t.Fatalf("Deterministic with zero range: expected 3000, got %d", p)
+	}
+	if _, err := ports.Resolve("x", c, func(int) bool { return false }); err == nil {
+		t.Fatal("expected error on zero range in Resolve")
 	}
 }
