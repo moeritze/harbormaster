@@ -90,7 +90,12 @@ own.
     harbormaster install claude --dry-run  # show what would change
     harbormaster uninstall claude          # remove exactly what was added
 
-What the hooks do: at session start Claude sees the registry and this worktree's port; before a shell command, a `kill`/`pkill`/`lsof -ti | xargs kill` aimed at a port another session owns is denied with the owner shown, and an unwrapped `npm run dev`-style start gets a nudge (`HARBORMASTER_STRICT=1` denies it); at session end the session's own servers are released and stopped. Hooks always fail open: any internal error allows the command and logs to `$HARBORMASTER_HOME/hook-errors.log`.
+What the hooks do: at session start Claude sees the registry and this worktree's port; before a shell command, a `kill`/`pkill`/`lsof -ti | xargs kill` aimed at a port another session owns is denied with the owner shown, a kill with no port or pid in it (`pkill -f node`) while other sessions have servers running asks you first, and an unwrapped `npm run dev`-style start gets a nudge (`HARBORMASTER_STRICT=1` denies it); at session end the session's own servers are released and stopped, unless the session merely cleared or resumed its transcript. Hooks never auto-approve anything: an allow carries context but leaves Claude Code's own permission prompt exactly as it was. They always fail open: any internal error allows the command and logs to `$HARBORMASTER_HOME/hook-errors.log`.
+
+Set `HARBORMASTER_HOOKS=0` in Claude Code's environment to switch the hooks off
+without uninstalling them: every deny and ask becomes an allow whose reason is
+attached as context instead. Every deny and ask reason names this escape hatch,
+so a session that hits a wrong decision can always get past it.
 
 The same files are available as a plugin in `adapters/claude-plugin/` (`claude --plugin-dir adapters/claude-plugin`).
 
