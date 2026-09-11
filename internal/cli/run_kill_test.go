@@ -140,6 +140,46 @@ func TestRunPropagatesExitCode(t *testing.T) {
 	}
 }
 
+// TestReleaseKillTerminatesRealProcess is the `release --kill` half of the
+// session-end path: the entry goes away and the process actually dies.
+func TestReleaseKillTerminatesRealProcess(t *testing.T) {
+	h := newHarness(t, "s1", "/wt/a")
+	cmd := exec.Command("sleep", "30")
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	pid := cmd.Process.Pid
+	// Reap as soon as the signal lands; an unreaped zombie still answers
+	// kill(pid, 0) and would make Terminate spin for its whole timeout.
+	waitDone := make(chan struct{})
+	go func() {
+		_ = cmd.Wait()
+		close(waitDone)
+	}()
+	t.Cleanup(func() {
+		_ = cmd.Process.Kill()
+		<-waitDone
+	})
+	h.seed(t, registry.Entry{ID: "own", Port: 3998, PID: pid, Session: "s1", Spawned: true})
+
+	if err := h.run("release", "3998", "--kill"); err != nil {
+		t.Fatalf("release --kill: %v", err)
+	}
+	f, _ := h.app.Store.Load()
+	if len(f.Entries) != 0 {
+		t.Fatalf("entry not removed: %+v", f.Entries)
+	}
+
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) && syscall.Kill(pid, 0) == nil {
+		time.Sleep(20 * time.Millisecond)
+	}
+	if syscall.Kill(pid, 0) == nil {
+		t.Fatal("process still alive after release --kill")
+	}
+}
+
 // TestRunMarksEntrySpawned pins the flag that decides group signalling:
 // only entries `run` created may later be killed as a process group.
 func TestRunMarksEntrySpawned(t *testing.T) {

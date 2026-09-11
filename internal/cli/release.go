@@ -40,8 +40,14 @@ func newRelease(a *app.App) *cobra.Command {
 						kept = append(kept, e)
 						continue
 					}
-					if port != 0 && !force && !ident.Owns(a.Ident, e, a.Git.Worktree) {
-						return exitf(ExitDenied, "port %d owned by %s. Use --force to release anyway.", port, ownerLine(e, a.Clock()))
+					// Ownership is checked for every matched entry, not just
+					// port matches: `release --session X` from another session
+					// would otherwise kill X's servers with no --force. A
+					// session id the caller actually owns still passes.
+					mine := ident.Owns(a.Ident, e, a.Git.Worktree) ||
+						(session != "" && session == a.Ident.Session)
+					if !force && !mine {
+						return exitf(ExitDenied, "port %d owned by %s. Use --force to release anyway.", e.Port, ownerLine(e, a.Clock()))
 					}
 					removed = append(removed, e)
 				}
