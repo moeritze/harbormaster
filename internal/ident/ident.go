@@ -83,38 +83,106 @@ func Sanitize(s string) string {
 }
 
 var (
-	sensitiveKey = regexp.MustCompile(`(?i)(key|secret|token|password|passwd|pwd)`)
+	// sensitiveKey matches flag and variable names whose values are secrets.
+	// Substring matching is deliberate (spec §10: *KEY*, *SECRET*, ...): it
+	// fails safe by over-redacting names like --keyboard.
+	sensitiveKey = regexp.MustCompile(`(?i)(key|secret|token|password|passwd|pwd|auth|credential|bearer|dsn)`)
 	assignment   = regexp.MustCompile(`^(--?[A-Za-z0-9_-]+|[A-Za-z_][A-Za-z0-9_]*)=(.*)$`)
+	// shortSecretFlag covers single-letter flags that conventionally take a
+	// password (mysql/psql/ssh -p, curl -u).
+	shortSecretFlag = regexp.MustCompile(`^-[pu]$`)
+	// urlCreds finds scheme://user[:pass]@ anywhere in an argument.
+	urlCreds = regexp.MustCompile(`([A-Za-z][A-Za-z0-9+.-]*://)[^/@\s]+@`)
+	// authHeader matches "Name: value" / "Name:value" for headers that carry
+	// credentials, as one argument (curl -H "Authorization: Bearer x").
+	authHeader = regexp.MustCompile(`(?i)^(authorization|proxy-authorization|cookie|set-cookie|x-api-key|x-auth-token|api-key):\s*.*$`)
+	// bearerToken masks "Bearer <token>" wherever it appears.
+	bearerToken = regexp.MustCompile(`(?i)\bbearer\s+\S+`)
 )
 
-// RedactCmd joins args for storage, masking sensitive values.
+// maxArg caps one stored argument; maxCmd caps the stored command line.
+const (
+	maxArg = 256
+	maxCmd = 2048
+)
+
+// RedactCmd joins args for storage, masking sensitive values. Redaction runs
+// per argument before any truncation, so a secret late on a long command
+// line is masked rather than hidden behind an earlier cut.
 func RedactCmd(args []string) string {
 	out := make([]string, 0, len(args))
 	maskNext := false
+	total := 0
 	for _, a := range args {
-		if maskNext {
-			maskNext = false
-			if strings.HasPrefix(a, "-") {
-				// The sensitive flag took no value (boolean switch); don't
-				// swallow the next flag as its argument.
-				out = append(out, a)
-				continue
-			}
-			out = append(out, "***")
-			continue
+		a = redactArg(a, &maskNext)
+		a = Sanitize(truncate(a, maxArg))
+		if total+len(a)+1 > maxCmd {
+			out = append(out, "…")
+			break
 		}
-		if m := assignment.FindStringSubmatch(a); m != nil {
-			if sensitiveKey.MatchString(m[1]) {
-				out = append(out, m[1]+"=***")
-				continue
-			}
-			out = append(out, a)
-			continue
-		}
-		if strings.HasPrefix(a, "-") && sensitiveKey.MatchString(a) {
-			maskNext = true
-		}
+		total += len(a) + 1
 		out = append(out, a)
 	}
-	return Sanitize(strings.Join(out, " "))
+	return strings.Join(out, " ")
+}
+
+// redactArg masks the secret-bearing parts of one argument. maskNext carries
+// the "previous flag takes a value" state between arguments.
+func redactArg(a string, maskNext *bool) string {
+	if *maskNext {
+		*maskNext = false
+		if strings.HasPrefix(a, "-") {
+			// The sensitive flag took no value (boolean switch); don't
+			// swallow the next flag as its argument.
+			return redactHeaderFlag(a, maskNext)
+		}
+		if m := authHeader.FindStringSubmatch(a); m != nil {
+			return m[1] + ": ***"
+		}
+		return "***"
+	}
+	if m := authHeader.FindStringSubmatch(a); m != nil {
+		return m[1] + ": ***"
+	}
+	a = urlCreds.ReplaceAllString(a, "${1}***@")
+	a = bearerToken.ReplaceAllString(a, "Bearer ***")
+	if m := assignment.FindStringSubmatch(a); m != nil {
+		if sensitiveKey.MatchString(m[1]) {
+			return m[1] + "=***"
+		}
+		return a
+	}
+	return redactHeaderFlag(a, maskNext)
+}
+
+// redactHeaderFlag decides whether a flag argument makes the NEXT argument a
+// secret: sensitive flag names (--token, --password), short password flags
+// (-p, -u), and header flags (-H/--header) whose header may carry credentials.
+func redactHeaderFlag(a string, maskNext *bool) string {
+	if !strings.HasPrefix(a, "-") {
+		return a
+	}
+	switch {
+	case a == "-H" || a == "--header":
+		*maskNext = true
+		// The next arg is only masked when it is an auth header; plain
+		// headers pass through (see redactArg's authHeader check).
+		*maskNext = false
+		return a
+	case shortSecretFlag.MatchString(a), sensitiveKey.MatchString(a):
+		*maskNext = true
+	}
+	return a
+}
+
+// truncate cuts s to at most n bytes on a rune boundary, marking the cut.
+func truncate(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	cut := n - len("…")
+	for cut > 0 && !utf8.RuneStart(s[cut]) {
+		cut--
+	}
+	return s[:cut] + "…"
 }
