@@ -3,6 +3,7 @@
 package cli_test
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -296,5 +297,164 @@ func TestNewEntryRecordsStartTime(t *testing.T) {
 	f, _ := h.app.Store.Peek()
 	if len(f.Entries) != 1 || f.Entries[0].StartTime != "start-77" {
 		t.Fatalf("%+v", f.Entries)
+	}
+}
+
+// TestKillRefusesGroupSignalForEntryWithoutStartTime and the backfill that
+// repairs it: an entry with no recorded start time cannot be checked for pid
+// reuse, and a process-GROUP signal against it could hit every process in
+// whatever group holds that id now. `ls` prunes, pruning backfills, and the
+// kill then goes through.
+func TestKillRefusesGroupSignalForEntryWithoutStartTime(t *testing.T) {
+	h := newHarness(t, "s1", "/wt/a")
+	h.app.PidStartTime = func(int) (string, error) { return "t1", nil }
+	h.app.Store.StartTimeOf = func(int) string { return "t1" }
+	h.app.Terminate = func(int, bool, time.Duration) error { return nil }
+	// The parent shell is a real process of our uid, so runner.Guard passes
+	// and the missing start time is what decides.
+	h.seed(t, registry.Entry{ID: "nostart", Port: 3310, PID: os.Getppid(), Session: "s1", Spawned: true})
+
+	err := h.run("kill", "3310")
+	if c := exitCode(err); c != 1 || !strings.Contains(err.Error(), "no recorded start time") {
+		t.Fatalf("code %d err %v", c, err)
+	}
+	if !strings.Contains(err.Error(), "harbormaster ls") {
+		t.Fatalf("the refusal must name the repair: %v", err)
+	}
+	f, _ := h.app.Store.Peek()
+	if len(f.Entries) != 1 {
+		t.Fatalf("entry must survive a refused kill: %+v", f.Entries)
+	}
+	// The read that refused also repaired the row -- for the NEXT read.
+	if f.Entries[0].StartTime != "t1" {
+		t.Fatalf("the start time must have been backfilled and persisted: %+v", f.Entries)
+	}
+
+	// `harbormaster ls` is the step the message asks for; afterwards the
+	// entry has a start time that predates the kill, and the kill works.
+	if err := h.run("ls"); err != nil {
+		t.Fatalf("ls: %v", err)
+	}
+	if err := h.run("kill", "3310"); err != nil {
+		t.Fatalf("kill must work once the start time is recorded: %v", err)
+	}
+	f, _ = h.app.Store.Peek()
+	if len(f.Entries) != 0 {
+		t.Fatalf("the entry must be gone after the kill: %+v", f.Entries)
+	}
+}
+
+// TestKillRestoresEntryAfterFailedSignal: the entry is removed before the
+// signal, so a signal that fails has to put it back -- the process is still
+// running and the registry must keep saying so.
+func TestKillRestoresEntryAfterFailedSignal(t *testing.T) {
+	h := newHarness(t, "s1", "/wt/a")
+	h.app.PidStartTime = func(int) (string, error) { return "t1", nil }
+	h.app.Terminate = func(int, bool, time.Duration) error { return errors.New("operation not permitted") }
+	h.seed(t, registry.Entry{ID: "own", Port: 3501, PID: os.Getppid(), Session: "s1", StartTime: "t1"})
+
+	err := h.run("kill", "3501")
+	if c := exitCode(err); c != 1 || !strings.Contains(err.Error(), "signal pid") {
+		t.Fatalf("code %d err %v", c, err)
+	}
+	f, _ := h.app.Store.Peek()
+	if len(f.Entries) != 1 || f.Entries[0].ID != "own" {
+		t.Fatalf("the entry must be restored after a failed signal: %+v", f.Entries)
+	}
+}
+
+// TestKillDoesNotRestoreOverAnotherEntry: if something else registered the
+// port while the signal was being sent, that entry is the truth about the
+// port. Restoring would leave two rows claiming one port, so the user gets a
+// warning instead.
+func TestKillDoesNotRestoreOverAnotherEntry(t *testing.T) {
+	h := newHarness(t, "s1", "/wt/a")
+	h.app.PidStartTime = func(int) (string, error) { return "t1", nil }
+	h.app.Terminate = func(int, bool, time.Duration) error {
+		// Someone else claims the port while the signal is in flight.
+		_ = h.app.Store.Update(func(f *registry.File) error {
+			f.Entries = append(f.Entries, registry.Entry{ID: "other", Port: 3502, PID: os.Getppid(), Session: "s2", StartedAt: h.now})
+			return nil
+		})
+		return errors.New("operation not permitted")
+	}
+	h.seed(t, registry.Entry{ID: "own", Port: 3502, PID: os.Getppid(), Session: "s1", StartTime: "t1"})
+
+	if c := exitCode(h.run("kill", "3502")); c != 1 {
+		t.Fatalf("code %d", c)
+	}
+	f, _ := h.app.Store.Peek()
+	if len(f.Entries) != 1 || f.Entries[0].ID != "other" {
+		t.Fatalf("the newer entry must stand alone on the port: %+v", f.Entries)
+	}
+	if !strings.Contains(h.out.String(), "not restoring") {
+		t.Fatalf("expected a warning that the entry was dropped: %q", h.out.String())
+	}
+}
+
+// TestClaimWarnsWhenStartTimeCannotBeRecorded: registering without a start
+// time silently turns the pid-reuse guard off for that entry, which the user
+// has to be told about.
+func TestClaimWarnsWhenStartTimeCannotBeRecorded(t *testing.T) {
+	h := newHarness(t, "s1", "/wt/a")
+	h.app.PidStartTime = func(int) (string, error) { return "", errors.New("ps not found") }
+	h.app.PidOnPort = func(p int) (int, string, bool) { return 77, "node", p == 3303 }
+	h.prober.alive[77] = true
+	h.prober.listening[3303] = true
+	if err := h.run("claim", "3303", "--pid", "77"); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(h.out.String(), "pid-reuse protection is off for this entry") {
+		t.Fatalf("expected a warning, got %q", h.out.String())
+	}
+	f, _ := h.app.Store.Peek()
+	if len(f.Entries) != 1 || f.Entries[0].StartTime != "" {
+		t.Fatalf("%+v", f.Entries)
+	}
+}
+
+// TestStoredCmdKeepsTheWholeRedactedCommand: the stored cmd used to be cut
+// at the 256-byte identifier cap, which hid the tail of any real command
+// line -- including the very redaction markers that prove a secret was
+// masked. It is capped at 2 KiB now, and marked only when it really is cut.
+func TestStoredCmdKeepsTheWholeRedactedCommand(t *testing.T) {
+	h := newHarness(t, "s1", "/wt/a")
+	filler := strings.Repeat("a", 850)
+	if err := h.run("run", "--port", "3996", "--", "true", filler, "--password=x"); err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	hist, _ := h.app.Store.History(0)
+	if len(hist) != 1 {
+		t.Fatalf("history %+v", hist)
+	}
+	cmd := hist[0].Cmd
+	if !strings.Contains(cmd, "--password=***") {
+		t.Fatalf("the tail of the command was cut off: %q", cmd)
+	}
+	if strings.Contains(cmd, "x") && strings.Contains(cmd, "password=x") {
+		t.Fatalf("secret leaked: %q", cmd)
+	}
+	if len(cmd) > 2048 {
+		t.Fatalf("stored cmd is %d bytes, over the 2 KiB cap", len(cmd))
+	}
+	if strings.HasSuffix(cmd, "…") {
+		t.Fatalf("nothing was over the cap, so nothing may be marked as cut: %q", cmd)
+	}
+
+	// Over the cap the line is cut and says so.
+	h2 := newHarness(t, "s1", "/wt/a")
+	args := []string{"run", "--port", "3995", "--", "true"}
+	for i := 0; i < 20; i++ {
+		args = append(args, strings.Repeat("b", 200))
+	}
+	if err := h2.run(args...); err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	hist2, _ := h2.app.Store.History(0)
+	if len(hist2) != 1 || !strings.HasSuffix(hist2[0].Cmd, "…") {
+		t.Fatalf("an over-long command must be marked as cut: %+v", hist2)
+	}
+	if len(hist2[0].Cmd) > 2048 {
+		t.Fatalf("stored cmd is %d bytes, over the 2 KiB cap", len(hist2[0].Cmd))
 	}
 }

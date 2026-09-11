@@ -5,6 +5,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/moeritze/harbormaster/internal/app"
@@ -64,7 +65,7 @@ func New(a *app.App) *Core { return NewWithEnv(a, os.Getenv) }
 
 // NewWithEnv is New with the environment lookup injected (tests).
 func NewWithEnv(a *app.App, getenv func(string) string) *Core {
-	return &Core{
+	c := &Core{
 		App:         a,
 		Strict:      getenv("HARBORMASTER_STRICT") == "1",
 		Disabled:    getenv("HARBORMASTER_HOOKS") == "0",
@@ -72,6 +73,23 @@ func NewWithEnv(a *app.App, getenv func(string) string) *Core {
 		GitDiscover: gitctx.Discover,
 		Terminate:   runner.Terminate,
 	}
+	// A hook has no terminal to warn on: its stderr is the agent's plumbing,
+	// not the user's screen. Route the registry's warnings (today: a
+	// quarantined registry.json) into the same hook error log every other
+	// internal problem lands in, so an event a user must eventually see is
+	// not lost just because a hook happened to be what found it.
+	if a != nil && a.Store != nil {
+		a.Store.Warn = warnLog{c}
+	}
+	return c
+}
+
+// warnLog adapts registry.Store.Warn onto Core.Logf.
+type warnLog struct{ c *Core }
+
+func (w warnLog) Write(p []byte) (int, error) {
+	w.c.Logf("registry: %s", strings.TrimRight(string(p), "\n"))
+	return len(p), nil
 }
 
 // Handle never panics and never fails closed: any internal error is
@@ -333,7 +351,7 @@ func (c *Core) sessionEnd(s *scope, reason string) (Result, error) {
 			c.logf("session_end: guard pid %d: %v", e.PID, err)
 			continue
 		}
-		if err := runner.CheckStartTime(e.PID, e.StartTime, a.PidStartTime); err != nil {
+		if err := runner.CheckStartTime(e.PID, e.StartTime, e.Spawned, a.PidStartTime); err != nil {
 			c.logf("session_end: pid %d: %v", e.PID, err)
 			continue
 		}

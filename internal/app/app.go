@@ -37,6 +37,12 @@ type App struct {
 	PidOnPort func(port int) (int, string, bool)
 	// PidStartTime reports when a pid started (see registry.Entry.StartTime).
 	PidStartTime func(pid int) (string, error)
+	// Terminate signals a registered process (SIGTERM, then SIGKILL after
+	// the timeout; the whole process group when group is true). nil means
+	// runner.Terminate. It exists so tests can drive what happens after a
+	// signal that fails, and is not typed against runner because runner
+	// imports this package.
+	Terminate func(pid int, group bool, timeout time.Duration) error
 }
 
 // Options tune how New builds the App.

@@ -25,12 +25,37 @@ func Guard(pid int, uid func(int) (int, error)) error {
 	return nil
 }
 
+// ErrNoStartTime is returned for a group signal against an entry that never
+// recorded a start time. The message names the repair, because the entry is
+// repairable: `harbormaster ls` prunes, and pruning backfills the start time
+// of every live entry that is missing one.
+var ErrNoStartTime = errors.New("entry has no recorded start time; refusing a process-group signal (run harbormaster ls to backfill, then retry)")
+
 // CheckStartTime refuses to signal pid when the process now occupying it is
 // not the one the entry was written for. stored is the start time recorded
-// at registration; an empty stored value or a nil lookup disables the check.
-func CheckStartTime(pid int, stored string, lookup func(int) (string, error)) error {
-	if stored == "" || lookup == nil {
+// at registration; a nil lookup, or a platform that cannot report start
+// times at all, disables the check.
+//
+// group says the signal would go to the whole process group, which changes
+// what a MISSING start time is allowed to mean. Signalling a single reused
+// pid hits one wrong process; signalling -pid hits every process in whatever
+// group holds that id now -- a login shell's group, say. So an entry that
+// cannot be verified may still be signalled on its own (runner.Guard still
+// applies to it), but never as a group.
+func CheckStartTime(pid int, stored string, group bool, lookup func(int) (string, error)) error {
+	if lookup == nil {
 		return nil
+	}
+	if stored == "" {
+		if !group {
+			return nil
+		}
+		// Only refuse where a start time could have been recorded: on a
+		// platform that has none (windows) every entry would be refused.
+		if cur, err := lookup(pid); err != nil || cur == "" {
+			return nil
+		}
+		return ErrNoStartTime
 	}
 	cur, err := lookup(pid)
 	if err != nil {
