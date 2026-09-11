@@ -32,6 +32,9 @@ func newRun(a *app.App) *cobra.Command {
 			}
 			reg := func(p, pid int, cmdLine, lbl string) (registry.Entry, error) {
 				e := newEntry(a, p, pid, cmdLine, lbl)
+				// Only `run` puts the child in its own process group, so only
+				// entries it creates may later be signaled as a group.
+				e.Spawned = true
 				err := a.Store.Update(func(f *registry.File) error {
 					if err := denyIfRegistered(a, f, p); err != nil {
 						return err

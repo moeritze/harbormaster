@@ -16,9 +16,14 @@ import (
 	"github.com/moeritze/harbormaster/internal/registry"
 )
 
-type fakeProber struct{ alive, listening map[int]bool }
+type fakeProber struct {
+	alive, listening map[int]bool
+	// allAlive answers PidAlive for pids the test cannot know up front,
+	// such as a child `run` spawned.
+	allAlive bool
+}
 
-func (f *fakeProber) PidAlive(p int) bool      { return f.alive[p] }
+func (f *fakeProber) PidAlive(p int) bool      { return f.allAlive || f.alive[p] }
 func (f *fakeProber) PortListening(p int) bool { return f.listening[p] }
 
 type harness struct {

@@ -2,7 +2,6 @@ package cli
 
 import (
 	"fmt"
-	"strings"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -54,11 +53,11 @@ func newKill(a *app.App) *cobra.Command {
 }
 
 // terminateEntry applies the safety guard, then terminates. Entries created by
-// `run` own a process group; claimed pids are signaled individually.
+// `run` own a process group and are signaled as one; every other entry (a
+// claimed pid, or a row written by an older build) is signaled individually.
 func terminateEntry(_ *app.App, e registry.Entry) error {
 	if err := runner.Guard(e.PID, liveness.PidUID); err != nil {
 		return err
 	}
-	group := !strings.HasPrefix(e.Cmd, "claimed pid")
-	return runner.Terminate(e.PID, group, 10*time.Second)
+	return runner.Terminate(e.PID, e.Spawned, 10*time.Second)
 }

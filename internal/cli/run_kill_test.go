@@ -1,7 +1,10 @@
 package cli_test
 
 import (
+	"fmt"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"syscall"
 	"testing"
@@ -82,7 +85,7 @@ func TestKillOwnEntryTerminatesRealProcess(t *testing.T) {
 		_ = cmd.Process.Kill()
 		<-waitDone
 	})
-	h.seed(t, registry.Entry{ID: "own", Port: 3999, PID: pid, Session: "s1"})
+	h.seed(t, registry.Entry{ID: "own", Port: 3999, PID: pid, Session: "s1", Spawned: true})
 
 	if err := h.run("kill", "3999"); err != nil {
 		t.Fatalf("kill: %v", err)
@@ -134,5 +137,41 @@ func TestRunPropagatesExitCode(t *testing.T) {
 	err := h.run("run", "--port", "3999", "--", "sh", "-c", "exit 3")
 	if c := exitCode(err); c != 3 {
 		t.Fatalf("code %d err %v", c, err)
+	}
+}
+
+// TestRunMarksEntrySpawned pins the flag that decides group signalling:
+// only entries `run` created may later be killed as a process group.
+func TestRunMarksEntrySpawned(t *testing.T) {
+	h := newHarness(t, "s1", "/wt/a")
+	h.prober.allAlive = true // the child's pid is not known up front
+	gate := filepath.Join(t.TempDir(), "stop")
+	done := make(chan error, 1)
+	go func() {
+		done <- h.run("run", "--port", "3997", "--",
+			"sh", "-c", fmt.Sprintf("while [ ! -f %q ]; do sleep 0.05; done", gate))
+	}()
+
+	var got registry.Entry
+	deadline := time.Now().Add(10 * time.Second)
+	for time.Now().Before(deadline) {
+		f, err := h.app.Store.Load()
+		if err == nil && len(f.Entries) == 1 {
+			got = f.Entries[0]
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if err := os.WriteFile(gate, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := <-done; err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	if got.PID == 0 {
+		t.Fatal("run never registered an entry")
+	}
+	if !got.Spawned {
+		t.Fatalf("entry registered by run is not marked spawned: %+v", got)
 	}
 }
