@@ -11,7 +11,11 @@ import (
 )
 
 func main() {
-	a := &app.App{Stdout: os.Stdout, Stderr: os.Stderr}
+	a, err := app.New(os.Getenv, os.Stdout, os.Stderr)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(cli.ExitRegistry)
+	}
 	root := cli.NewRoot(a)
 	if err := root.Execute(); err != nil {
 		var ee *cli.ExitError

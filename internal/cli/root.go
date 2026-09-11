@@ -30,5 +30,6 @@ func NewRoot(a *app.App) *cobra.Command {
 			return err
 		},
 	})
+	root.AddCommand(newLs(a), newPort(a), newCheck(a), newClaim(a), newRelease(a), newGc(a), newHistory(a))
 	return root
 }
