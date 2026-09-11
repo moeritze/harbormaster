@@ -3,7 +3,7 @@ package cli
 import (
 	"errors"
 	"fmt"
-	"strings"
+	"regexp"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -26,6 +26,9 @@ func newRun(a *app.App) *cobra.Command {
 			if len(args) == 0 {
 				return exitf(ExitUsage, "usage: harbormaster run [flags] -- <command...>")
 			}
+			if err := validateEnvNames(envNames); err != nil {
+				return err
+			}
 			resolved, err := resolveRunPort(a, port)
 			if err != nil {
 				return err
@@ -44,12 +47,15 @@ func newRun(a *app.App) *cobra.Command {
 				})
 				return e, err
 			}
-			_, _ = fmt.Fprintf(a.Stderr, "harbormaster: port %d, %s\n", resolved, strings.Join(args, " "))
+			// The banner goes through the same redaction as the stored cmd
+			// field: a secret passed on the command line must not be echoed
+			// into a terminal or an agent's captured output.
+			_, _ = fmt.Fprintf(a.Stderr, "harbormaster: port %d, %s\n", resolved, ident.RedactCmd(args))
 			code, err := runner.Run(cmd.Context(), a, runner.Options{
 				Port: resolved, Label: label, EnvNames: envNames, Args: args,
 				ListenTimeout: registry.ListenGrace, KillTimeout: 10 * time.Second,
 			}, reg)
-			return runResultToErr(code, err, args[0])
+			return runResultToErr(code, err, render(args[0]))
 		},
 	}
 	cmd.Flags().IntVar(&port, "port", 0, "port to use (default: $PORT, then this worktree's deterministic port)")
@@ -57,6 +63,33 @@ func newRun(a *app.App) *cobra.Command {
 	cmd.Flags().StringArrayVar(&envNames, "env", nil, "additional env var name to set to the port (PORT is always set)")
 	cmd.Flags().SetInterspersed(false)
 	return cmd
+}
+
+var envNamePattern = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
+
+// dangerousEnvNames are variables that change how the child resolves
+// programs and libraries. Setting one of them to a port number would at best
+// break the command and at worst redirect what it loads, so --env refuses
+// them outright even though they are valid names.
+var dangerousEnvNames = map[string]bool{
+	"PATH":                  true,
+	"HOME":                  true,
+	"LD_PRELOAD":            true,
+	"DYLD_INSERT_LIBRARIES": true,
+	"DYLD_LIBRARY_PATH":     true,
+	"LD_LIBRARY_PATH":       true,
+}
+
+// validateEnvNames rejects anything that is not a plain environment variable
+// name. The value harbormaster assigns is always the port number, but the
+// name lands in the child's environment verbatim.
+func validateEnvNames(names []string) error {
+	for _, n := range names {
+		if !envNamePattern.MatchString(n) || dangerousEnvNames[n] {
+			return exitf(ExitUsage, "invalid --env name %q", n)
+		}
+	}
+	return nil
 }
 
 // resolveRunPort applies spec §6.1 steps 1-2. Whether the port came from

@@ -215,3 +215,36 @@ func TestRunMarksEntrySpawned(t *testing.T) {
 		t.Fatalf("entry registered by run is not marked spawned: %+v", got)
 	}
 }
+
+// TestRunBannerRedactsSensitiveArgs covers H5: the banner harbormaster
+// prints before starting the child must not echo a secret that was passed on
+// the command line.
+func TestRunBannerRedactsSensitiveArgs(t *testing.T) {
+	h := newHarness(t, "s1", "/wt/a")
+	if err := h.run("run", "--port", "3999", "--", "true", "--password=hunter2"); err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	out := h.out.String()
+	if strings.Contains(out, "hunter2") {
+		t.Fatalf("secret leaked to stderr: %q", out)
+	}
+	if !strings.Contains(out, "--password=***") {
+		t.Fatalf("banner should show the redacted form: %q", out)
+	}
+}
+
+// TestRunRejectsInvalidEnvNames covers H6.
+func TestRunRejectsInvalidEnvNames(t *testing.T) {
+	bad := []string{"BAD-NAME", "1PORT", "with space", "", "PATH", "HOME", "LD_PRELOAD", "DYLD_INSERT_LIBRARIES", "DYLD_LIBRARY_PATH", "LD_LIBRARY_PATH"}
+	for _, n := range bad {
+		h := newHarness(t, "s1", "/wt/a")
+		err := h.run("run", "--port", "3999", "--env", n, "--", "true")
+		if c := exitCode(err); c != 3 || !strings.Contains(err.Error(), "invalid --env name") {
+			t.Fatalf("--env %q: code %d err %v", n, c, err)
+		}
+	}
+	h := newHarness(t, "s1", "/wt/a")
+	if err := h.run("run", "--port", "3999", "--env", "API_PORT", "--", "true"); err != nil {
+		t.Fatalf("a valid name must be accepted: %v", err)
+	}
+}
