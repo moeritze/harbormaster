@@ -3,6 +3,7 @@ package cli
 import (
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 
 	"github.com/spf13/cobra"
@@ -49,6 +50,33 @@ func defaultCommand() string {
 
 const supportedAgents = "claude, cursor, agents-md"
 
+// guiPathDirs is the PATH a desktop-launched app inherits when it is started
+// from the Dock, Spotlight or a .desktop entry: no login shell has run, so
+// none of ~/.local/bin, ~/go/bin or a version manager's shims are on it.
+// Claude Code and Cursor both run hooks with that PATH, which is why a
+// --project install writing the bare name can leave hooks that never fire.
+var guiPathDirs = []string{"/usr/bin", "/bin", "/usr/local/bin", "/opt/homebrew/bin"}
+
+// lookPath is exec.LookPath, indirected so a test can decide what a GUI
+// app's PATH holds.
+var lookPath = exec.LookPath
+
+// onGUIPath reports whether a bare command name resolves in guiPathDirs.
+// LookPath on a path with a separator checks exactly that file, which is the
+// per-directory probe a minimal PATH would do.
+func onGUIPath(name string) bool {
+	for _, dir := range guiPathDirs {
+		if _, err := lookPath(filepath.Join(dir, name)); err == nil {
+			return true
+		}
+	}
+	return false
+}
+
+// commandPathWarning is printed after a --project install that wired up the
+// bare name and could not find it where the agent will look.
+const commandPathWarning = `warning: "harbormaster" is not on a GUI app's default PATH; use --command <absolute path> if hooks do not fire`
+
 func newInstall(a *app.App, uninstall bool) *cobra.Command {
 	var project, command string
 	var dryRun bool
@@ -69,7 +97,7 @@ func newInstall(a *app.App, uninstall bool) *cobra.Command {
 			}
 			var r install.Report
 			var err error
-			restart := ""
+			restart, checkPath := "", false
 			switch args[0] {
 			case "claude":
 				dir, derr := claudeConfigDir(project)
@@ -82,7 +110,7 @@ func newInstall(a *app.App, uninstall bool) *cobra.Command {
 				} else {
 					r, err = install.Claude(o)
 				}
-				restart = "Restart Claude Code sessions to pick up the hooks."
+				restart, checkPath = "Restart Claude Code sessions to pick up the hooks.", true
 			case "cursor":
 				dir, derr := cursorConfigDir(project)
 				if derr != nil {
@@ -97,7 +125,7 @@ func newInstall(a *app.App, uninstall bool) *cobra.Command {
 				} else {
 					r, err = install.Cursor(o)
 				}
-				restart = "Restart Cursor to pick up the hooks."
+				restart, checkPath = "Restart Cursor to pick up the hooks.", true
 			case "agents-md":
 				dir := project
 				if dir == "" {
@@ -124,6 +152,9 @@ func newInstall(a *app.App, uninstall bool) *cobra.Command {
 			}
 			if r.Backup != "" && !dryRun {
 				_, _ = fmt.Fprintf(a.Stdout, "%s reformatted; backup at %s\n", filepath.Base(r.Settings), r.Backup)
+			}
+			if !uninstall && !dryRun && checkPath && command == "harbormaster" && !onGUIPath(command) {
+				_, _ = fmt.Fprintln(a.Stderr, commandPathWarning)
 			}
 			if !uninstall && !dryRun && restart != "" {
 				_, _ = fmt.Fprintln(a.Stdout, "done. "+restart)
