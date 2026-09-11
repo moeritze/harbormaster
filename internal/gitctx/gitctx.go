@@ -2,9 +2,13 @@
 package gitctx
 
 import (
+	"context"
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
+
+	"github.com/moeritze/harbormaster/internal/tools"
 )
 
 // Context describes where a command runs. Empty fields mean "not in git".
@@ -14,18 +18,33 @@ type Context struct {
 	Branch   string
 }
 
-// Discover never fails; it returns whatever git can tell.
+// gitTimeout bounds one git invocation. A hung git (a repository on a
+// stalled network mount) must not hang every harbormaster command.
+const gitTimeout = 3 * time.Second
+
+// Discover never fails; it returns whatever git can tell, in one call.
 func Discover(dir string) Context {
-	top := run(dir, "rev-parse", "--show-toplevel")
-	if top == "" {
+	git := tools.Path("git")
+	if git == "" {
 		return Context{}
 	}
-	common := run(dir, "rev-parse", "--git-common-dir")
+	ctx, cancel := context.WithTimeout(context.Background(), gitTimeout)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, git, "rev-parse", "--show-toplevel", "--git-common-dir", "--abbrev-ref", "HEAD")
+	cmd.Dir = dir
+	out, err := cmd.Output()
+	if err != nil {
+		return Context{}
+	}
+	lines := strings.Split(strings.TrimRight(string(out), "\n"), "\n")
+	if len(lines) < 3 || lines[0] == "" {
+		return Context{}
+	}
+	top, common, branch := lines[0], lines[1], lines[2]
 	if common != "" && !filepath.IsAbs(common) {
 		common = filepath.Join(top, common)
 	}
 	repo := filepath.Dir(filepath.Clean(common))
-	branch := run(dir, "rev-parse", "--abbrev-ref", "HEAD")
 	if branch == "HEAD" {
 		branch = ""
 	}
@@ -36,14 +55,4 @@ func Discover(dir string) Context {
 		top = w
 	}
 	return Context{Repo: repo, Worktree: top, Branch: branch}
-}
-
-func run(dir string, args ...string) string {
-	cmd := exec.Command("git", args...)
-	cmd.Dir = dir
-	out, err := cmd.Output()
-	if err != nil {
-		return ""
-	}
-	return strings.TrimSpace(string(out))
 }
