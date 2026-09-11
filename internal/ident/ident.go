@@ -68,8 +68,14 @@ func RedactCmd(args []string) string {
 	maskNext := false
 	for _, a := range args {
 		if maskNext {
-			out = append(out, "***")
 			maskNext = false
+			if strings.HasPrefix(a, "-") {
+				// The sensitive flag took no value (boolean switch); don't
+				// swallow the next flag as its argument.
+				out = append(out, a)
+				continue
+			}
+			out = append(out, "***")
 			continue
 		}
 		if m := assignment.FindStringSubmatch(a); m != nil {

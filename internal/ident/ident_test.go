@@ -71,3 +71,16 @@ func TestRedactCmd(t *testing.T) {
 		t.Fatalf("over-redacted: %s", got)
 	}
 }
+
+func TestRedactCmdBooleanFlag(t *testing.T) {
+	got := ident.RedactCmd([]string{"--token", "--verbose", "--port", "3000"})
+	if strings.Contains(got, "***") {
+		t.Fatalf("over-redacted: %s", got)
+	}
+	if !strings.Contains(got, "--verbose") {
+		t.Fatalf("dropped flag: %s", got)
+	}
+	if !strings.Contains(got, "--port 3000") {
+		t.Fatalf("over-redacted: %s", got)
+	}
+}
