@@ -34,6 +34,10 @@ type Entry struct {
 	Label     string    `json:"label,omitempty"`
 	StartedAt time.Time `json:"started_at"`
 	HostUser  string    `json:"host_user"`
+	// Spawned marks entries harbormaster started itself with `run`, which
+	// puts the child in its own process group. Only those may be signaled
+	// as a group; a claimed pid is signaled individually.
+	Spawned bool `json:"spawned,omitempty"`
 }
 
 // File is the on-disk document.
