@@ -1,0 +1,10 @@
+{
+  "name": "harbormaster",
+  "description": "Port and dev-server registry for parallel agent sessions: hooks that stop sessions from killing each other's servers, plus the harbormaster skill.",
+  "version": "0.1.0",
+  "author": { "name": "Moritz Röseler", "url": "https://github.com/moeritze" },
+  "repository": "https://github.com/moeritze/harbormaster",
+  "license": "MIT",
+  "hooks": "./hooks/hooks.json",
+  "skills": "./skills/"
+}
