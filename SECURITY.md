@@ -76,8 +76,31 @@ supervisor, and signal handling in `kill`/`release`.
   the process-owner check they depend on is unavailable. `claim --pid` needs
   `--force` for the same reason: the port-to-pid lookup is unimplemented.
 
-## Supply chain (planned)
+## Supply chain
 
-Signed releases (Sigstore cosign, keyless), an SBOM, and SLSA provenance are
-planned for the first tagged release. Until then, build from source with
-`go install github.com/moeritze/harbormaster/cmd/harbormaster@<commit>`.
+Releases are produced only by `.github/workflows/release.yml`, which runs on
+`v*` tags inside the `release` GitHub environment. That environment requires
+the maintainer's approval before the job starts, so a pushed tag alone cannot
+publish anything. Every action in the workflow is pinned to a commit SHA; the
+SLSA generator is pinned to a release tag as its documentation requires.
+
+Each release ships:
+
+- `checksums.txt` (sha256 of every archive) and `checksums.txt.sigstore.json`,
+  a Sigstore bundle produced by cosign keyless signing with the workflow's
+  GitHub OIDC identity. There are no stored signing keys.
+- an SBOM (`*.sbom.json`, syft) for every archive
+- `harbormaster.intoto.jsonl`, SLSA v1 build provenance from
+  `slsa-framework/slsa-github-generator`
+- a Homebrew cask pushed to `moeritze/homebrew-tap` (only when the tap token
+  is configured; the release does not depend on it)
+
+Verify:
+
+    cosign verify-blob --bundle checksums.txt.sigstore.json \
+      --certificate-identity-regexp '^https://github.com/moeritze/harbormaster/' \
+      --certificate-oidc-issuer https://token.actions.githubusercontent.com checksums.txt
+    slsa-verifier verify-artifact <archive> --provenance-path harbormaster.intoto.jsonl \
+      --source-uri github.com/moeritze/harbormaster --source-tag <tag>
+
+Anything built from `main` with `go install …@main` is unsigned.
