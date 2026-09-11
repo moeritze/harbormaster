@@ -1,5 +1,7 @@
 package cli
 
+import "fmt"
+
 // Exit codes per spec §6.5.
 const (
 	ExitOK           = 0
@@ -16,3 +18,7 @@ type ExitError struct {
 }
 
 func (e *ExitError) Error() string { return e.Msg }
+
+func exitf(code int, format string, args ...any) error {
+	return &ExitError{Code: code, Msg: fmt.Sprintf(format, args...)}
+}
