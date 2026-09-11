@@ -111,6 +111,15 @@ so a session that hits a wrong decision can always get past it.
 
 The same files are available as a plugin in `adapters/claude-plugin/` (`claude --plugin-dir adapters/claude-plugin`).
 
+## Cursor and other agents
+
+    harbormaster install cursor              # user-level: ~/.cursor/hooks.json
+    harbormaster install cursor --project .  # per-repo: .cursor/hooks.json + .cursor/rules/harbormaster.mdc
+    harbormaster install agents-md           # AGENTS.md block in the current directory (Codex, Cursor, others)
+    harbormaster uninstall cursor|agents-md  # remove exactly what was added
+
+Cursor hooks (verified against https://cursor.com/docs/hooks): `sessionStart` injects the registry and exports `HARBORMASTER_SESSION` into the agent's shell so its `harbormaster run`/`kill` calls are owned by that conversation; `beforeShellExecution` denies kills of ports other sessions own and asks on blind kills (`pkill`, `killall`); `sessionEnd` releases and stops the conversation's own servers. Cursor documents no "no opinion" answer for shell hooks, so harbormaster prints nothing on allow and the wrap-your-server nudge is not delivered to Cursor; the rule file and the session-start context carry that guidance. OpenAI Codex documents hooks too (https://learn.chatgpt.com/docs/hooks), but their decision payloads are not yet verified, so Codex gets the AGENTS.md block for now.
+
 ## Security
 
 See SECURITY.md, including what harbormaster explicitly does not guarantee:
