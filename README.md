@@ -34,18 +34,25 @@ stdin) are unaffected.
 
 ### How ownership works
 
-Each entry records the agent session that started it (from `CLAUDE_SESSION_ID`
-or `HARBORMASTER_SESSION`). `kill` and `release` refuse entries that belong to
+Each entry records the agent session that started it. `HARBORMASTER_SESSION`
+always overrides everything else. Otherwise harbormaster looks for
+`CLAUDE_CODE_SESSION_ID` (what Claude Code's Bash tool exports) or, failing
+that, the older `CLAUDE_SESSION_ID`. With none of those set, it falls back to
+a stable id for the current shell: `TMUX_PANE`, `ITERM_SESSION_ID`, or
+`TERM_SESSION_ID` (as `tmux:...` / `iterm:...` / `term:...`), or else
+`shell:<parent pid>`. `kill` and `release` refuse entries that belong to
 another session unless `--force`. `--force` overrides ownership, never
 registration: harbormaster never signals a pid it has no entry for, so `claim`
 a server it did not start before killing it. Even `--force` never touches
 pid 1, your own pid, or another user's process.
 
-If you have no session id at all, any `kill` or `release` refuses to act on
-anything -- the port form, `--all-mine` and `--session <id>` alike -- and tells
-you to set `HARBORMASTER_SESSION` (or pass `--force`). Reads -- `ls`, `check`,
-`run`'s conflict check -- still fall back to matching the worktree, so nothing
-about the day-to-day flow changes.
+The only way to end up with no session id at all is setting `HARBORMASTER_AGENT`
+without `HARBORMASTER_SESSION` -- every other path always yields a non-empty
+id. In that case any `kill` or `release` refuses to act on anything -- the
+port form, `--all-mine` and `--session <id>` alike -- and tells you to set
+`HARBORMASTER_SESSION` (or pass `--force`). Reads -- `ls`, `check`, `run`'s
+conflict check -- still fall back to matching the worktree, so nothing about
+the day-to-day flow changes.
 
 `claim <port> --pid P` registers P only if the OS agrees that P is the process
 listening on that port; `claim --force` registers it anyway, which you need

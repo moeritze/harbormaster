@@ -16,14 +16,22 @@ func TestDetect(t *testing.T) {
 	cases := []struct {
 		name string
 		env  map[string]string
+		ppid int
 		want ident.Identity
 	}{
-		{"human", nil, ident.Identity{Agent: "human", HostUser: "m"}},
-		{"claude", map[string]string{"CLAUDE_SESSION_ID": "s1"}, ident.Identity{Agent: "claude", Session: "s1", HostUser: "m"}},
-		{"override", map[string]string{"CLAUDE_SESSION_ID": "s1", "HARBORMASTER_AGENT": "cursor", "HARBORMASTER_SESSION": "c9"}, ident.Identity{Agent: "cursor", Session: "c9", HostUser: "m"}},
+		{"human shell fallback (ppid)", nil, 4321, ident.Identity{Agent: "human", Session: "shell:4321", HostUser: "m"}},
+		{"human tmux fallback", map[string]string{"TMUX_PANE": "%3"}, 4321, ident.Identity{Agent: "human", Session: "tmux:%3", HostUser: "m"}},
+		{"human iterm fallback", map[string]string{"ITERM_SESSION_ID": "w0t0p0"}, 4321, ident.Identity{Agent: "human", Session: "iterm:w0t0p0", HostUser: "m"}},
+		{"human term fallback", map[string]string{"TERM_SESSION_ID": "abc"}, 4321, ident.Identity{Agent: "human", Session: "term:abc", HostUser: "m"}},
+		{"tmux beats term when both set", map[string]string{"TMUX_PANE": "%3", "TERM_SESSION_ID": "abc"}, 4321, ident.Identity{Agent: "human", Session: "tmux:%3", HostUser: "m"}},
+		{"claude legacy var", map[string]string{"CLAUDE_SESSION_ID": "s1"}, 4321, ident.Identity{Agent: "claude", Session: "s1", HostUser: "m"}},
+		{"claude code session id", map[string]string{"CLAUDE_CODE_SESSION_ID": "cc1"}, 4321, ident.Identity{Agent: "claude", Session: "cc1", HostUser: "m"}},
+		{"claude code session id wins over legacy", map[string]string{"CLAUDE_CODE_SESSION_ID": "cc1", "CLAUDE_SESSION_ID": "s1"}, 4321, ident.Identity{Agent: "claude", Session: "cc1", HostUser: "m"}},
+		{"harbormaster session without agent stays human", map[string]string{"HARBORMASTER_SESSION": "hs1", "CLAUDE_CODE_SESSION_ID": "cc1"}, 4321, ident.Identity{Agent: "human", Session: "hs1", HostUser: "m"}},
+		{"override wins over claude code id and legacy", map[string]string{"CLAUDE_CODE_SESSION_ID": "cc1", "CLAUDE_SESSION_ID": "s1", "HARBORMASTER_AGENT": "cursor", "HARBORMASTER_SESSION": "c9"}, 4321, ident.Identity{Agent: "cursor", Session: "c9", HostUser: "m"}},
 	}
 	for _, c := range cases {
-		if got := ident.Detect(env(c.env), "m"); got != c.want {
+		if got := ident.Detect(env(c.env), "m", c.ppid); got != c.want {
 			t.Errorf("%s: got %+v want %+v", c.name, got, c.want)
 		}
 	}

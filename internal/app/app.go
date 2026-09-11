@@ -59,7 +59,7 @@ func New(getenv func(string) string, stdout, stderr io.Writer) (*App, error) {
 	return &App{
 		Stdout: stdout, Stderr: stderr, Now: now,
 		Store: store, Prober: prober,
-		Ident:     ident.Detect(getenv, hostUser),
+		Ident:     ident.Detect(getenv, hostUser, os.Getppid()),
 		Git:       gitctx.Discover(cwd),
 		Ports:     pc,
 		Cwd:       cwd,
