@@ -7,8 +7,9 @@ project_name: harbormaster
 
 before:
   hooks:
+    # Tests run in the ci workflow's test job (with -race); rerunning them here
+    # only duplicates work and made the timing-sensitive tests flaky on CI.
     - go mod tidy
-    - go test ./...
 
 builds:
   - id: harbormaster
