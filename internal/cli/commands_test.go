@@ -33,7 +33,7 @@ type harness struct {
 	now    time.Time
 }
 
-//nolint:unparam // session is a fixed "s1" across this suite; kept as a param for clarity at each call site
+//nolint:unparam // worktree is a fixed "/wt/a" for most of this suite; kept as a param for clarity at each call site
 func newHarness(t *testing.T, session, worktree string) *harness {
 	t.Helper()
 	now := time.Date(2026, 9, 10, 12, 0, 0, 0, time.UTC)
@@ -236,10 +236,26 @@ func TestReleaseBySessionAndAllMine(t *testing.T) {
 	if len(f.Entries) != 1 || f.Entries[0].ID != "c" {
 		t.Fatalf("%+v", f.Entries)
 	}
+	// Naming someone else's session id is not ownership: without --force the
+	// release is denied and their entry stays put.
+	if c := exitCode(h.run("release", "--session", "s2")); c != 1 {
+		t.Fatalf("releasing another session should be denied, got %d", c)
+	}
+	f, _ = h.app.Store.Load()
+	if len(f.Entries) != 1 || f.Entries[0].ID != "c" {
+		t.Fatalf("foreign entry should survive: %+v", f.Entries)
+	}
+}
+
+// TestReleaseOwnSessionSucceeds is the session-end hook's own call:
+// `release --session <my id>` from the session that owns the entries.
+func TestReleaseOwnSessionSucceeds(t *testing.T) {
+	h := newHarness(t, "s2", "/wt/b")
+	h.seed(t, registry.Entry{ID: "c", Port: 3003, PID: 13, Session: "s2", Worktree: "/wt/b"})
 	if err := h.run("release", "--session", "s2"); err != nil {
 		t.Fatal(err)
 	}
-	f, _ = h.app.Store.Load()
+	f, _ := h.app.Store.Load()
 	if len(f.Entries) != 0 {
 		t.Fatalf("%+v", f.Entries)
 	}
