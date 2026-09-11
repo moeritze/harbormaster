@@ -16,7 +16,7 @@ func newGc(a *app.App) *cobra.Command {
 		RunE: func(_ *cobra.Command, _ []string) error {
 			pruned, err := a.Store.Prune()
 			if err != nil {
-				return exitf(ExitRegistry, "%v", err)
+				return registryErr(err)
 			}
 			if asJSON {
 				return writeJSON(a.Stdout, pruned)

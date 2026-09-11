@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -359,5 +360,75 @@ func TestClaimRefusesUnverifiablePid(t *testing.T) {
 	}
 	if err := h.run("claim", "3005", "--pid", "42", "--force"); err != nil {
 		t.Fatalf("--force should claim anyway: %v", err)
+	}
+}
+
+// TestKillWithoutSessionRequiresForce covers H7: a caller with no session id
+// owns nothing for write commands, otherwise unsetting HARBORMASTER_SESSION
+// would be a way around ownership.
+func TestKillWithoutSessionRequiresForce(t *testing.T) {
+	h := newHarness(t, "", "/wt/a")
+	h.seed(t, registry.Entry{ID: "x", Port: 3001, PID: 11, Session: "s2", Worktree: "/wt/a"})
+
+	err := h.run("kill", "3001")
+	if c := exitCode(err); c != 1 || !strings.Contains(err.Error(), "no session id in the environment") {
+		t.Fatalf("code %d err %v", c, err)
+	}
+	f, _ := h.app.Store.Load()
+	if len(f.Entries) != 1 {
+		t.Fatalf("entry must survive a refused kill: %+v", f.Entries)
+	}
+	// --force gets past the session rule; whatever happens next, it is not
+	// the sessionless refusal any more.
+	if err := h.run("kill", "3001", "--force"); err != nil && strings.Contains(err.Error(), "no session id") {
+		t.Fatalf("--force still refused for the session reason: %v", err)
+	}
+}
+
+// TestReleaseWithoutSessionRequiresForce is H7 for release, in both the port
+// form and --all-mine.
+func TestReleaseWithoutSessionRequiresForce(t *testing.T) {
+	h := newHarness(t, "", "/wt/a")
+	h.seed(t, registry.Entry{ID: "x", Port: 3001, PID: 11, Session: "s2", Worktree: "/wt/a"})
+
+	err := h.run("release", "3001")
+	if c := exitCode(err); c != 1 || !strings.Contains(err.Error(), "no session id in the environment") {
+		t.Fatalf("port form: code %d err %v", c, err)
+	}
+	err = h.run("release", "--all-mine")
+	if c := exitCode(err); c != 1 || !strings.Contains(err.Error(), "no session id in the environment") {
+		t.Fatalf("--all-mine: code %d err %v", c, err)
+	}
+	f, _ := h.app.Store.Load()
+	if len(f.Entries) != 1 {
+		t.Fatalf("entry must survive a refused release: %+v", f.Entries)
+	}
+
+	if err := h.run("release", "3001", "--force"); err != nil {
+		t.Fatalf("--force should release: %v", err)
+	}
+	f, _ = h.app.Store.Load()
+	if len(f.Entries) != 0 {
+		t.Fatalf("%+v", f.Entries)
+	}
+}
+
+// TestReleaseRegistryErrorExitsFour covers H8: a registry failure from a
+// write command is exit 4, not the usage code main falls back to.
+func TestReleaseRegistryErrorExitsFour(t *testing.T) {
+	h := newHarness(t, "s1", "/wt/a")
+	h.seed(t, registry.Entry{ID: "a", Port: 3001, PID: 11, Session: "s1"})
+
+	reg := filepath.Join(h.app.Store.Dir(), "registry.json")
+	if err := os.Remove(reg); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.Join(t.TempDir(), "elsewhere.json"), reg); err != nil {
+		t.Fatal(err)
+	}
+
+	err := h.run("release", "3001")
+	if c := exitCode(err); c != 4 || !strings.Contains(err.Error(), "registry:") {
+		t.Fatalf("code %d err %v", c, err)
 	}
 }
