@@ -44,13 +44,54 @@ func readSettings(path string) (*settings, error) {
 	return s, nil
 }
 
-func (s *settings) hooks() map[string]any {
-	h, _ := s.doc["hooks"].(map[string]any)
-	if h == nil {
-		h = map[string]any{}
+// hooks returns the document's "hooks" object, creating it when absent. A
+// "hooks" key that holds something other than a JSON object is somebody's
+// configuration, however odd: it is refused by name rather than silently
+// replaced, so an install can never drop it on the floor.
+func (s *settings) hooks(path string) (map[string]any, error) {
+	v, ok := s.doc["hooks"]
+	if !ok || v == nil {
+		h := map[string]any{}
 		s.doc["hooks"] = h
+		return h, nil
 	}
-	return h
+	h, ok := v.(map[string]any)
+	if !ok {
+		return nil, fmt.Errorf("%s: \"hooks\" is not a JSON object; fix it or move it aside before installing", path)
+	}
+	return h, nil
+}
+
+// eventList returns the array registered under one hook event. Like hooks,
+// a value of the wrong type is refused by name instead of replaced.
+func eventList(path, event string, hooks map[string]any) ([]any, error) {
+	v, ok := hooks[event]
+	if !ok || v == nil {
+		return nil, nil
+	}
+	list, ok := v.([]any)
+	if !ok {
+		return nil, fmt.Errorf("%s: \"hooks.%s\" is not a JSON array; fix it or move it aside before installing", path, event)
+	}
+	return list, nil
+}
+
+// refuseSymlink is the guard every path install reads or writes goes
+// through. Writing through a symlink means writing to wherever it points —
+// possibly outside the config dir entirely — and the atomic rename in write
+// would replace the link with a regular file, silently detaching it.
+func refuseSymlink(path string) error {
+	fi, err := os.Lstat(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if fi.Mode()&os.ModeSymlink != 0 {
+		return fmt.Errorf("%s is a symlink; harbormaster will not write through it — replace it with a regular file or point HARBORMASTER at another config dir", path)
+	}
+	return nil
 }
 
 func (s *settings) write(path string) error {
