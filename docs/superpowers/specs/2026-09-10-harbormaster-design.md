@@ -77,15 +77,18 @@ The registry file is the single source of truth. Every command reads it, prunes 
       "session": "session_0132...",
       "label": "auth feature login flow",
       "started_at": "2026-09-10T17:13:00Z",
-      "host_user": "moritzroeseler"
+      "host_user": "moritzroeseler",
+      "spawned": true
     }
   ]
 }
 ```
 
+`spawned` is set only by `run`; entries without it are signaled individually.
+
 **Invariants:**
 
-- Every read prunes. An entry is dead when its pid is gone **or** its port is not listening. Both are checked to guard against pid reuse. Pruned entries are appended to `history.jsonl` with a `reason` field.
+- Every read prunes. An entry is dead when its pid is gone **or** its port is not listening on two consecutive probes 100 ms apart (after the listen grace). Both are checked to guard against pid reuse. Pruned entries are appended to `history.jsonl` with a `reason` field.
 - Every write is: acquire `flock` → read → prune → mutate → write to temp file → `rename` over `registry.json`. Lock held for the whole sequence. Lock wait timeout 5 s, then fail loudly.
 - `agent` and `session` come from the environment: `CLAUDE_SESSION_ID`, Cursor and Codex equivalents (exact variable names verified during planning), else `agent: "human"`, `session: ""`.
 - `repo` is the parent of `git rev-parse --git-common-dir` (shared across worktrees). `worktree` is `git rev-parse --show-toplevel`. Both optional; the tool works outside git with `repo`/`worktree` empty.
@@ -97,11 +100,11 @@ The registry file is the single source of truth. Every command reads it, prunes 
 
 ```
 harbormaster run [--port N] [--label "..."] [--env NAME] -- <cmd...>
-harbormaster ls  [--json] [--all]
+harbormaster ls  [--json]
 harbormaster check <port>
 harbormaster claim <port> [--pid P] [--label "..."]
 harbormaster release <port> | --session ID | --all-mine
-harbormaster kill <port> [--force]
+harbormaster kill <port> [--force] [--json]
 harbormaster port
 harbormaster gc
 harbormaster history [--json]
@@ -127,7 +130,7 @@ Exit 0 if free or owned by caller. Exit 1 if foreign-owned, printing the owner. 
 
 ### 6.3 `kill <port>`
 
-Refuses foreign-owned or unregistered ports unless `--force`. Sends SIGTERM to the registered pid's process group, waits 10 s, SIGKILL, removes entry.
+Refuses ports that are not registered (exit 2). Refuses foreign-owned entries unless `--force` (exit 1). `--force` overrides ownership, never registration: use `claim` first for a process harbormaster did not start. Sends SIGTERM to the registered pid's process group, waits 10 s, SIGKILL, removes entry.
 
 ### 6.4 `release`
 
@@ -213,7 +216,7 @@ Hook execution must complete in under 100 ms in the common case (registry read +
 These apply to the tool's runtime behavior, separate from repository security (§12).
 
 **Process safety**
-- `kill` and `release --kill` never signal a pid that is not in the registry, unless `--force`. `--force` still refuses pid 1, the caller's own pid, and any pid whose owner uid differs from the caller.
+- `kill` and `release --kill` never signal a pid that is not in the registry. `--force` overrides ownership only; it still refuses pid 1, the caller's own pid, and any pid whose owner uid differs from the caller.
 - Signals are sent to the process group created by `run`, never to arbitrary groups. For `claim`ed pids (not spawned by harbormaster), only the pid itself is signaled.
 - Never runs anything with elevated privileges. No `sudo` anywhere in the codebase or docs.
 - Hooks default to **allow** on any internal error. A broken harbormaster must never block an agent from working. Errors are logged to `$HARBORMASTER_HOME/hook-errors.log`.

@@ -20,12 +20,18 @@ Not affiliated with Phabricator's Harbormaster.
     hm check 3000                               # is 3000 free, mine, or foreign?
     hm kill 3000                                # only your own; --force for others
 
+When you run `harbormaster run` from an interactive terminal, the child's stdin
+is detached, so dev-server keyboard shortcuts are unavailable; agents (piped
+stdin) are unaffected.
+
 ### How ownership works
 
 Each entry records the agent session that started it (from `CLAUDE_SESSION_ID`
 or `HARBORMASTER_SESSION`). `kill` and `release` refuse entries that belong to
-another session unless `--force`. Even `--force` never touches pid 1, your own
-pid, or another user's process.
+another session unless `--force`. `--force` overrides ownership, never
+registration: harbormaster never signals a pid it has no entry for, so `claim`
+a server it did not start before killing it. Even `--force` never touches
+pid 1, your own pid, or another user's process.
 
 ### Ports
 
