@@ -47,13 +47,19 @@ func newInstall(a *app.App, uninstall bool) *cobra.Command {
 		Use:   use,
 		Short: short,
 		Args:  cobra.ExactArgs(1),
-		RunE: func(_ *cobra.Command, args []string) error {
+		RunE: func(c *cobra.Command, args []string) error {
 			if args[0] != "claude" {
 				return exitf(ExitUsage, "unsupported agent %q (supported: claude)", args[0])
 			}
 			dir, err := claudeConfigDir(project)
 			if err != nil {
 				return exitf(ExitUsage, "%v", err)
+			}
+			// A --project install lands in a file that gets committed and
+			// shared, where this machine's absolute path is worse than
+			// useless. Bare "harbormaster" is what every checkout can run.
+			if project != "" && !c.Flags().Changed("command") {
+				command = "harbormaster"
 			}
 			o := install.Options{ConfigDir: dir, Command: command, Skill: skills.Harbormaster, DryRun: dryRun, Now: a.Clock}
 			var r install.Report
@@ -72,8 +78,8 @@ func newInstall(a *app.App, uninstall bool) *cobra.Command {
 			for _, act := range r.Actions {
 				_, _ = fmt.Fprintf(a.Stdout, "%s%s\n", verb, act)
 			}
-			if r.Backup != "" {
-				_, _ = fmt.Fprintf(a.Stdout, "backup: %s\n", r.Backup)
+			if r.Backup != "" && !dryRun {
+				_, _ = fmt.Fprintf(a.Stdout, "settings.json reformatted; backup at %s\n", r.Backup)
 			}
 			if !uninstall && !dryRun {
 				_, _ = fmt.Fprintln(a.Stdout, "done. Restart Claude Code sessions to pick up the hooks.")
