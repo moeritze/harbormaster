@@ -54,7 +54,9 @@ a stable id for the current shell: `TMUX_PANE`, `ITERM_SESSION_ID`, or
 another session unless `--force`. `--force` overrides ownership, never
 registration: harbormaster never signals a pid it has no entry for, so `claim`
 a server it did not start before killing it. Even `--force` never touches
-pid 1, your own pid, or another user's process.
+pid 1, your own pid, or another user's process. Each entry also records when
+its process started, so a pid that has been recycled since it was registered
+is refused instead of signalled.
 
 The only way to end up with no session id at all is setting `HARBORMASTER_AGENT`
 without `HARBORMASTER_SESSION` -- every other path always yields a non-empty
