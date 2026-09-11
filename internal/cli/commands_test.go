@@ -177,6 +177,7 @@ func TestClaimAndRelease(t *testing.T) {
 	h := newHarness(t, "s1", "/wt/a")
 	h.prober.alive[42] = true
 	h.prober.listening[3005] = true
+	h.app.PidOnPort = func(p int) (int, string, bool) { return 42, "node", p == 3005 }
 	if err := h.run("claim", "3005", "--pid", "42", "--label", "manual"); err != nil {
 		t.Fatal(err)
 	}
@@ -208,6 +209,7 @@ func TestClaimJSON(t *testing.T) {
 	h := newHarness(t, "s1", "/wt/a")
 	h.prober.alive[43] = true
 	h.prober.listening[3006] = true
+	h.app.PidOnPort = func(p int) (int, string, bool) { return 43, "node", p == 3006 }
 	if err := h.run("claim", "3006", "--pid", "43", "--json"); err != nil {
 		t.Fatal(err)
 	}
@@ -314,5 +316,48 @@ func TestHistoryLists(t *testing.T) {
 	_ = h.run("history")
 	if !strings.Contains(h.out.String(), "released") || !strings.Contains(h.out.String(), "3001") {
 		t.Fatalf("%q", h.out.String())
+	}
+}
+
+// TestClaimRefusesPidThatDoesNotOwnThePort covers H3: registering an
+// arbitrary live pid against a port somebody else is listening on would let
+// `kill` be pointed at an unrelated process.
+func TestClaimRefusesPidThatDoesNotOwnThePort(t *testing.T) {
+	h := newHarness(t, "s1", "/wt/a")
+	h.prober.alive[42] = true
+	h.prober.listening[3005] = true
+	h.app.PidOnPort = func(p int) (int, string, bool) { return 99, "node", p == 3005 }
+
+	err := h.run("claim", "3005", "--pid", "42")
+	if c := exitCode(err); c != 3 || !strings.Contains(err.Error(), "is not listening on port 3005 (pid 99 is)") {
+		t.Fatalf("code %d err %v", c, err)
+	}
+	f, _ := h.app.Store.Load()
+	if len(f.Entries) != 0 {
+		t.Fatalf("refused claim must not register: %+v", f.Entries)
+	}
+
+	if err := h.run("claim", "3005", "--pid", "42", "--force"); err != nil {
+		t.Fatalf("--force should claim anyway: %v", err)
+	}
+	f, _ = h.app.Store.Load()
+	if len(f.Entries) != 1 || f.Entries[0].PID != 42 {
+		t.Fatalf("%+v", f.Entries)
+	}
+}
+
+// TestClaimRefusesUnverifiablePid is the other half of H3: when PidOnPort
+// cannot answer (lsof unavailable, or nothing listening) the claim is
+// refused too, unless --force.
+func TestClaimRefusesUnverifiablePid(t *testing.T) {
+	h := newHarness(t, "s1", "/wt/a")
+	h.prober.alive[42] = true
+	// The harness default PidOnPort reports !ok for every port.
+	err := h.run("claim", "3005", "--pid", "42")
+	if c := exitCode(err); c != 3 || !strings.Contains(err.Error(), "--force") {
+		t.Fatalf("code %d err %v", c, err)
+	}
+	if err := h.run("claim", "3005", "--pid", "42", "--force"); err != nil {
+		t.Fatalf("--force should claim anyway: %v", err)
 	}
 }

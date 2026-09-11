@@ -14,7 +14,7 @@ import (
 func newClaim(a *app.App) *cobra.Command {
 	var pid int
 	var label string
-	var asJSON bool
+	var force, asJSON bool
 	cmd := &cobra.Command{
 		Use:   "claim <port>",
 		Short: "Register a server you started without `run`",
@@ -30,6 +30,10 @@ func newClaim(a *app.App) *cobra.Command {
 					return exitf(ExitUsage, "cannot find a process on port %d, pass --pid", port)
 				}
 				pid = p
+			} else if !force {
+				if err := verifyPidOnPort(a, port, pid); err != nil {
+					return err
+				}
 			}
 			if !a.Prober.PidAlive(pid) {
 				return exitf(ExitUsage, "pid %d is not running", pid)
@@ -58,8 +62,24 @@ func newClaim(a *app.App) *cobra.Command {
 	}
 	cmd.Flags().IntVar(&pid, "pid", 0, "pid listening on the port (default: detect)")
 	cmd.Flags().StringVar(&label, "label", "", "what this server is for")
+	cmd.Flags().BoolVar(&force, "force", false, "register --pid even if it is not the process listening on the port")
 	cmd.Flags().BoolVar(&asJSON, "json", false, "machine-readable output")
 	return cmd
+}
+
+// verifyPidOnPort refuses a --pid the OS does not show listening on the
+// port. Registration is what licenses `kill` to signal a process, so
+// claiming an arbitrary live pid against a port would aim harbormaster at a
+// process that has nothing to do with it.
+func verifyPidOnPort(a *app.App, port, pid int) error {
+	actual, _, ok := a.PidOnPort(port)
+	if !ok {
+		return exitf(ExitUsage, "cannot confirm pid %d is listening on port %d; use --force to claim anyway", pid, port)
+	}
+	if actual != pid {
+		return exitf(ExitUsage, "pid %d is not listening on port %d (pid %d is); use --force to claim anyway", pid, port, actual)
+	}
+	return nil
 }
 
 // newEntry builds a registry entry for the current identity and worktree.
