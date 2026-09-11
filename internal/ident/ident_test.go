@@ -151,3 +151,67 @@ func TestRedactCmdTruncatesPerArgument(t *testing.T) {
 		t.Fatalf("expected truncation marker in %q", got)
 	}
 }
+
+// TestRedactCmdSecretsInsideArguments covers the reviewer's table: a secret
+// that sits inside an argument (a connection string, a query string, a JSON
+// body, a value glued to a short flag) is masked just like one that is an
+// argument of its own.
+func TestRedactCmdSecretsInsideArguments(t *testing.T) {
+	cases := []struct {
+		name string
+		args []string
+		leak []string
+		keep []string
+	}{
+		{"psql connection string", []string{"psql", "host=db user=alice password=swordfish"},
+			[]string{"swordfish"}, []string{"host=db", "user=alice", "password=***"}},
+		{"mysql attached short flags", []string{"mysql", "-pSuperSecret", "-ualice:hunter2"},
+			[]string{"SuperSecret", "hunter2", "alice"}, []string{"-p***", "-u***"}},
+		{"json body and query string", []string{"curl", "-d", `{"api_key":"sk-live"}`, "https://h/x?access_token=sk-999"},
+			[]string{"sk-live", "sk-999"}, []string{`"api_key":"***"`, "https://h/x?access_token=***"}},
+		{"single quoted json pair", []string{"curl", "-d", `{'password':'hunter2','user':'alice'}`},
+			[]string{"hunter2"}, []string{`'password':'***'`, `'user':'alice'`}},
+		{"semicolon separated assignments", []string{"sh-ish", "a=1;secret=shh;b=2"},
+			[]string{"shh"}, []string{"a=1", "secret=***", "b=2"}},
+		{"whole-argument secret is never split", []string{"app", "--password=two words here"},
+			[]string{"two words here", "words"}, []string{"--password=***"}},
+		{"harmless inner tokens survive", []string{"app", "--flags=a=1,b=2", "x?y=3&z=4"},
+			[]string{"***"}, []string{"--flags=a=1,b=2", "x?y=3&z=4"}},
+	}
+	for _, c := range cases {
+		got := ident.RedactCmd(c.args)
+		for _, l := range c.leak {
+			if strings.Contains(got, l) {
+				t.Errorf("%s: leaked %q in %q", c.name, l, got)
+			}
+		}
+		for _, k := range c.keep {
+			if !strings.Contains(got, k) {
+				t.Errorf("%s: missing %q in %q", c.name, k, got)
+			}
+		}
+	}
+}
+
+// TestSanitizeN pins the wider cap used for the stored command line: it
+// keeps far more than an identifier, and marks a cut it had to make.
+func TestSanitizeN(t *testing.T) {
+	if got := ident.SanitizeN("plain", 2048); got != "plain" {
+		t.Fatalf("short input must pass through unchanged: %q", got)
+	}
+	long := strings.Repeat("a", 900) + " --password=***"
+	if got := ident.SanitizeN(long, 2048); got != long {
+		t.Fatalf("a 900-byte command must survive a 2 KiB cap: %d bytes", len(got))
+	}
+	if got := ident.SanitizeN(long, 2048); strings.HasSuffix(got, "…") {
+		t.Fatalf("nothing was cut, so nothing must be marked: %q", got[len(got)-10:])
+	}
+	over := strings.Repeat("ä", 2000)
+	got := ident.SanitizeN(over, 2048)
+	if len(got) > 2048 || !strings.HasSuffix(got, "…") {
+		t.Fatalf("over-long input must be cut to the cap and marked: %d bytes, %q", len(got), got[len(got)-6:])
+	}
+	if strings.Contains(ident.SanitizeN("a\x00b\x1b[31m", 2048), "\x1b") {
+		t.Fatal("control characters must still be dropped")
+	}
+}

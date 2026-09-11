@@ -82,13 +82,21 @@ func verifyPidOnPort(a *app.App, port, pid int) error {
 	return nil
 }
 
+// maxStoredCmd caps the stored command line. cmdLine arrives from
+// ident.RedactCmd, which has already masked every argument and capped the
+// line at this same 2 KiB; putting it through the 256-byte identifier cap
+// as well would throw away most of a command the user has to recognize in
+// `ls`, and would gain nothing -- the redaction ran per argument, before
+// any truncation, so a longer stored line exposes no more than a short one.
+const maxStoredCmd = 2048
+
 // newEntry builds a registry entry for the current identity and worktree.
 func newEntry(a *app.App, port, pid int, cmdLine, label string) registry.Entry {
 	return registry.Entry{
 		ID:        ulid.Make().String(),
 		Port:      port,
 		PID:       pid,
-		Cmd:       ident.Sanitize(cmdLine),
+		Cmd:       ident.SanitizeN(cmdLine, maxStoredCmd),
 		Repo:      a.Git.Repo,
 		Worktree:  a.Git.Worktree,
 		Branch:    a.Git.Branch,
