@@ -76,6 +76,37 @@ func TestUpdatePersistsAndFileMode0600(t *testing.T) {
 	}
 }
 
+func TestRemove(t *testing.T) {
+	s := open(t)
+	if err := s.Update(func(f *registry.File) error {
+		f.Entries = append(f.Entries,
+			registry.Entry{ID: "a", Port: 3000, PID: 1, StartedAt: fixedNow()},
+			registry.Entry{ID: "b", Port: 3001, PID: 2, StartedAt: fixedNow()},
+		)
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	removed, ok, err := s.Remove("a")
+	if err != nil || !ok || removed.ID != "a" || removed.Port != 3000 {
+		t.Fatalf("remove present: removed=%+v ok=%v err=%v", removed, ok, err)
+	}
+	f, _ := s.Load()
+	if len(f.Entries) != 1 || f.Entries[0].ID != "b" {
+		t.Fatalf("entries after remove: %+v", f.Entries)
+	}
+
+	_, ok, err = s.Remove("nope")
+	if err != nil || ok {
+		t.Fatalf("remove absent: ok=%v err=%v", ok, err)
+	}
+	f, _ = s.Load()
+	if len(f.Entries) != 1 || f.Entries[0].ID != "b" {
+		t.Fatalf("entries changed after removing an absent id: %+v", f.Entries)
+	}
+}
+
 func TestLoadDoesNotRewriteWhenNothingPruned(t *testing.T) {
 	s := open(t)
 	if err := s.Update(func(f *registry.File) error {

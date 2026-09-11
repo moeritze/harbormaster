@@ -39,16 +39,9 @@ func newKill(a *app.App) *cobra.Command {
 			if err := terminateEntry(a, e); err != nil {
 				return exitf(ExitDenied, "%v", err)
 			}
-			_ = a.Store.Update(func(f *registry.File) error {
-				kept := f.Entries[:0]
-				for _, x := range f.Entries {
-					if x.ID != e.ID {
-						kept = append(kept, x)
-					}
-				}
-				f.Entries = kept
-				return nil
-			})
+			if _, _, err := a.Store.Remove(e.ID); err != nil {
+				_, _ = fmt.Fprintf(a.Stderr, "warn: registry: %v\n", err)
+			}
 			if err := a.Store.AppendHistory(registry.HistoryRecord{Entry: e, Reason: "killed", At: a.Clock()}); err != nil {
 				_, _ = fmt.Fprintf(a.Stderr, "warn: history: %v\n", err)
 			}

@@ -107,16 +107,9 @@ func Run(ctx context.Context, a *app.App, opts Options, register Register) (int,
 }
 
 func unregister(a *app.App, e registry.Entry) {
-	_ = a.Store.Update(func(f *registry.File) error {
-		kept := f.Entries[:0]
-		for _, x := range f.Entries {
-			if x.ID != e.ID {
-				kept = append(kept, x)
-			}
-		}
-		f.Entries = kept
-		return nil
-	})
+	if _, _, err := a.Store.Remove(e.ID); err != nil {
+		_, _ = fmt.Fprintf(a.Stderr, "warn: registry: %v\n", err)
+	}
 	_ = a.Store.AppendHistory(registry.HistoryRecord{Entry: e, Reason: "exited", At: a.Clock()})
 }
 
