@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"encoding/json"
 	"errors"
+	"io"
 	"os"
 	"strings"
 	"time"
@@ -29,7 +30,7 @@ func (s *Store) AppendHistory(rec HistoryRecord) error {
 }
 
 func (s *Store) appendHistoryLocked(rec HistoryRecord) error {
-	lines, err := s.readHistoryLines()
+	lines, _, err := s.readHistoryLines()
 	if err != nil {
 		return err
 	}
@@ -44,32 +45,52 @@ func (s *Store) appendHistoryLocked(rec HistoryRecord) error {
 	return s.atomicWrite(historyName, "history-*.tmp", []byte(strings.Join(lines, "\n")+"\n"))
 }
 
-func (s *Store) readHistoryLines() ([]string, error) {
+// maxHistoryLine caps how long one history line may be. A longer line cannot
+// be a record this build wrote (a record is a few hundred bytes), so it is
+// damage: junk from a crashed writer, or a file someone else appended to.
+const maxHistoryLine = 1024 * 1024
+
+// readHistoryLines returns the non-empty lines of history.jsonl and how many
+// over-long lines it skipped. A bufio.Scanner used to fail the whole read on
+// a line past its buffer limit, which broke every later write -- one damaged
+// line made `release`, `kill` and pruning error out for good. Reading with
+// bufio.Reader instead lets the damaged line be dropped (and dropped from
+// the file on the next append) while every valid record survives.
+func (s *Store) readHistoryLines() ([]string, int, error) {
 	if err := checkNotSymlink(s.path(historyName)); err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	fh, err := os.Open(s.path(historyName))
 	if errors.Is(err, os.ErrNotExist) {
-		return nil, nil
+		return nil, 0, nil
 	}
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	defer func() { _ = fh.Close() }()
+
 	var lines []string
-	sc := bufio.NewScanner(fh)
-	sc.Buffer(make([]byte, 0, 64*1024), 1024*1024)
-	for sc.Scan() {
-		if t := strings.TrimSpace(sc.Text()); t != "" {
+	skipped := 0
+	r := bufio.NewReader(fh)
+	for {
+		line, readErr := r.ReadString('\n')
+		if len(line) > maxHistoryLine {
+			skipped++
+		} else if t := strings.TrimSpace(line); t != "" {
 			lines = append(lines, t)
 		}
+		if readErr != nil {
+			if errors.Is(readErr, io.EOF) {
+				return lines, skipped, nil
+			}
+			return nil, 0, readErr
+		}
 	}
-	return lines, sc.Err()
 }
 
 // History returns the most recent limit records, oldest first. limit <= 0 means all.
 func (s *Store) History(limit int) ([]HistoryRecord, error) {
-	lines, err := s.readHistoryLines()
+	lines, _, err := s.readHistoryLines()
 	if err != nil {
 		return nil, err
 	}
