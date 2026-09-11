@@ -2,23 +2,28 @@ package registry
 
 import "time"
 
-// pruneEntries removes entries whose process is no longer running and
-// returns a HistoryRecord for each one removed; f.Entries is left holding
-// only entries whose PID is still alive.
-//
-// This is a minimal PID-liveness check only, added to make the commit
-// ordering in registry.go (write registry, then append history) testable
-// end-to-end. Task 5 replaces this with the full prune policy (port
-// liveness, grace periods, richer reasons, etc).
+// ListenGrace is how long after StartedAt an entry may have a closed port
+// without being pruned. Matches the run command's listen timeout.
+const ListenGrace = 60 * time.Second
+
+// pruneEntries removes entries whose process has died or whose port has
+// stopped listening (after ListenGrace) and returns a HistoryRecord for
+// each one removed; f.Entries is left holding only surviving entries.
 func pruneEntries(f *File, p Prober, now time.Time) []HistoryRecord {
-	kept := make([]Entry, 0, len(f.Entries))
+	if p == nil {
+		return nil
+	}
+	kept := f.Entries[:0]
 	var pruned []HistoryRecord
 	for _, e := range f.Entries {
-		if p.PidAlive(e.PID) {
+		switch {
+		case !p.PidAlive(e.PID):
+			pruned = append(pruned, HistoryRecord{Entry: e, Reason: "pid_dead", At: now})
+		case now.Sub(e.StartedAt) >= ListenGrace && !p.PortListening(e.Port):
+			pruned = append(pruned, HistoryRecord{Entry: e, Reason: "port_closed", At: now})
+		default:
 			kept = append(kept, e)
-			continue
 		}
-		pruned = append(pruned, HistoryRecord{Entry: e, Reason: "process exited", At: now})
 	}
 	f.Entries = kept
 	return pruned
