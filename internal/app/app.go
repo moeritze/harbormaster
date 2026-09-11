@@ -26,6 +26,7 @@ var ErrUsage = errors.New("usage")
 type App struct {
 	Stdout    io.Writer
 	Stderr    io.Writer
+	Stdin     io.Reader
 	Now       func() time.Time
 	Store     *registry.Store
 	Prober    registry.Prober
@@ -57,7 +58,7 @@ func New(getenv func(string) string, stdout, stderr io.Writer) (*App, error) {
 		return nil, err
 	}
 	return &App{
-		Stdout: stdout, Stderr: stderr, Now: now,
+		Stdout: stdout, Stderr: stderr, Stdin: os.Stdin, Now: now,
 		Store: store, Prober: prober,
 		Ident:     ident.Detect(getenv, hostUser, os.Getppid()),
 		Git:       gitctx.Discover(cwd),
