@@ -255,7 +255,9 @@ func TestRunRejectsInvalidEnvNames(t *testing.T) {
 func TestKillRefusesReusedPid(t *testing.T) {
 	h := newHarness(t, "s1", "/wt/a")
 	h.app.PidStartTime = func(int) (string, error) { return "Thu Sep 11 10:00:00 2026", nil }
-	h.seed(t, registry.Entry{ID: "reused", Port: 3300, PID: 4242, Session: "s1", StartTime: "Mon Jan  1 00:00:00 2024"})
+	// The parent shell is a real process of our uid, so runner.Guard passes
+	// and the start-time comparison is what refuses the kill.
+	h.seed(t, registry.Entry{ID: "reused", Port: 3300, PID: os.Getppid(), Session: "s1", StartTime: "Mon Jan  1 00:00:00 2024"})
 	err := h.run("kill", "3300")
 	if c := exitCode(err); c != 1 || !strings.Contains(err.Error(), "reused") {
 		t.Fatalf("code %d err %v", c, err)

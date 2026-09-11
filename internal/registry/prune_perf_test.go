@@ -50,8 +50,8 @@ func TestPruneFiftyStaleEntriesIsFast(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if d := time.Since(start); d > 500*time.Millisecond {
-		t.Fatalf("Load with 50 stale entries took %s, want < 500ms", d)
+	if d := time.Since(start); d > pruneBudget {
+		t.Fatalf("Load with 50 stale entries took %s, want < %s", d, pruneBudget)
 	}
 	if len(f.Entries) != 0 {
 		t.Fatalf("expected all pruned, %d left", len(f.Entries))
