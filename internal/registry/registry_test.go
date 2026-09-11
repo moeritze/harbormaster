@@ -1,6 +1,7 @@
 package registry_test
 
 import (
+	"bytes"
 	"errors"
 	"os"
 	"path/filepath"
@@ -297,13 +298,35 @@ func TestPrunePrunesAndReturnsRecords(t *testing.T) {
 	}
 }
 
-func TestLoadRejectsUnknownVersion(t *testing.T) {
-	s := open(t)
-	if err := os.WriteFile(filepath.Join(s.Dir(), "registry.json"), []byte(`{"version":99,"entries":[]}`), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := s.Load(); err == nil {
-		t.Fatal("expected version error")
+func TestLoadQuarantinesUnknownVersionAndCorruptFile(t *testing.T) {
+	for _, content := range []string{`{"version":99,"entries":[]}`, `{"version":1,"entries":[`} {
+		s := open(t)
+		var warn bytes.Buffer
+		s.Warn = &warn
+		if err := os.WriteFile(filepath.Join(s.Dir(), "registry.json"), []byte(content), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		f, err := s.Load()
+		if err != nil || len(f.Entries) != 0 {
+			t.Fatalf("%q: expected an empty registry after quarantine, got %+v %v", content, f, err)
+		}
+		matches, _ := filepath.Glob(filepath.Join(s.Dir(), "registry.json.corrupt-*"))
+		if len(matches) != 1 {
+			t.Fatalf("%q: expected one quarantined copy, got %v", content, matches)
+		}
+		if got, _ := os.ReadFile(matches[0]); string(got) != content {
+			t.Fatalf("%q: quarantined copy must be byte-identical", content)
+		}
+		if !strings.Contains(warn.String(), "moved it to") {
+			t.Fatalf("%q: expected a warning, got %q", content, warn.String())
+		}
+		// Writes now work again and warn only once per process.
+		if err := s.Update(func(_ *registry.File) error { return nil }); err != nil {
+			t.Fatalf("%q: registry must be usable after quarantine: %v", content, err)
+		}
+		if strings.Count(warn.String(), "moved it to") != 1 {
+			t.Fatalf("%q: warning must print once, got %q", content, warn.String())
+		}
 	}
 }
 

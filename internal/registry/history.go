@@ -93,7 +93,7 @@ func (s *Store) readHistoryLines() ([]string, int, error) {
 // state files, so it cannot observe history.jsonl mid-rename or race the
 // symlink check it makes before opening the file.
 func (s *Store) History(limit int) ([]HistoryRecord, error) {
-	unlock, err := lock(s.path(lockName), lockTimeout)
+	unlock, err := lock(s.path(lockName), readLockTimeout)
 	if err != nil {
 		return nil, err
 	}

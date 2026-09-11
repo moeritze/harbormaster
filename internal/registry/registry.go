@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"time"
@@ -18,6 +19,10 @@ const (
 	lockName      = "registry.lock"
 	historyName   = "history.jsonl"
 	lockTimeout   = 5 * time.Second
+	// readLockTimeout bounds how long a read-only path (Peek, History)
+	// waits for the lock. A stalled writer should make `ls` or a hook fail
+	// fast, not hang for the full write timeout.
+	readLockTimeout = time.Second
 )
 
 // Entry is one registered server. Field names are the on-disk schema (spec §5).
@@ -62,6 +67,10 @@ type Store struct {
 	dir    string
 	prober Prober
 	now    func() time.Time
+	// Warn receives one-line diagnostics (a quarantined registry). nil
+	// means os.Stderr.
+	Warn   io.Writer
+	warned bool
 }
 
 // Open creates dir with mode 0700 if it does not exist yet, validates it,
@@ -154,7 +163,7 @@ func (s *Store) Load() (*File, error) {
 // Peek returns the registry as stored, without pruning or probing. Hooks
 // use it because they must answer in milliseconds; entries may be stale.
 func (s *Store) Peek() (*File, error) {
-	unlock, err := lock(s.path(lockName), lockTimeout)
+	unlock, err := lock(s.path(lockName), readLockTimeout)
 	if err != nil {
 		return nil, err
 	}
@@ -285,15 +294,37 @@ func (s *Store) read() (*File, error) {
 	}
 	var f File
 	if err := json.Unmarshal(b, &f); err != nil {
-		return nil, fmt.Errorf("parse registry: %w", err)
+		return s.quarantine(fmt.Errorf("parse registry: %w", err))
 	}
 	if f.Version != SchemaVersion {
-		return nil, fmt.Errorf("registry schema version %d not supported (want %d)", f.Version, SchemaVersion)
+		return s.quarantine(fmt.Errorf("registry schema version %d not supported (want %d)", f.Version, SchemaVersion))
 	}
 	if f.Entries == nil {
 		f.Entries = []Entry{}
 	}
 	return &f, nil
+}
+
+// quarantine moves a registry.json this build cannot read out of the way
+// and continues from an empty document. Before this, one damaged file (a
+// crashed writer, a newer schema, a stray edit) made every command exit 4
+// with no way back short of deleting the file by hand. The damaged copy is
+// kept next to the registry for inspection; the warning is printed once
+// per process. Must be called with the lock held.
+func (s *Store) quarantine(cause error) (*File, error) {
+	moved := fmt.Sprintf("%s.corrupt-%d", s.path(fileName), s.now().Unix())
+	if err := os.Rename(s.path(fileName), moved); err != nil {
+		return nil, fmt.Errorf("%v; and could not quarantine it: %w", cause, err)
+	}
+	if !s.warned {
+		s.warned = true
+		w := s.Warn
+		if w == nil {
+			w = os.Stderr
+		}
+		_, _ = fmt.Fprintf(w, "harbormaster: warning: %v; moved it to %s and started an empty registry\n", cause, moved)
+	}
+	return &File{Version: SchemaVersion, Entries: []Entry{}}, nil
 }
 
 func (s *Store) write(f *File) error {
