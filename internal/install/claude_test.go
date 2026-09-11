@@ -158,3 +158,65 @@ func TestInstallRefusesInvalidJSON(t *testing.T) {
 		t.Fatal("must refuse to touch an unparseable settings.json")
 	}
 }
+
+// TestForeignHookSurvivesLookalikeCommand covers a user hook whose command
+// merely contains our Marker as a substring (e.g. it echoes it). It must not
+// be treated as ours: Claude() must still install its own PreToolUse entry
+// alongside it, and ClaudeUninstall() must leave it in place.
+func TestForeignHookSurvivesLookalikeCommand(t *testing.T) {
+	dir := t.TempDir()
+	orig := `{"hooks":{"PreToolUse":[{"matcher":"Bash","hooks":[{"type":"command","command":"echo \"harbormaster hook claude PreToolUse\""}]}]}}`
+	_ = os.WriteFile(filepath.Join(dir, "settings.json"), []byte(orig), 0o600)
+	r, err := install.Claude(opts(dir))
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, ev := range r.Added {
+		if ev == "PreToolUse" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("lookalike command must not block install: %+v", r)
+	}
+	m := readSettings(t, dir)
+	pre := m["hooks"].(map[string]any)["PreToolUse"].([]any)
+	if len(pre) != 2 {
+		t.Fatalf("expected lookalike entry + ours, got %d", len(pre))
+	}
+	ur, err := install.ClaudeUninstall(opts(dir))
+	if err != nil {
+		t.Fatal(err)
+	}
+	m = readSettings(t, dir)
+	pre = m["hooks"].(map[string]any)["PreToolUse"].([]any)
+	if len(pre) != 1 {
+		t.Fatalf("lookalike command must survive uninstall: %v (report %+v)", pre, ur)
+	}
+	entry := pre[0].(map[string]any)
+	hs := entry["hooks"].([]any)[0].(map[string]any)
+	if hs["command"] != `echo "harbormaster hook claude PreToolUse"` {
+		t.Fatalf("wrong entry removed: %v", entry)
+	}
+}
+
+// TestUninstallMatchesAbsolutePathAndAlias covers the two forms our own
+// installer's Command option may take: an absolute path to the binary, and
+// the "hm" alias.
+func TestUninstallMatchesAbsolutePathAndAlias(t *testing.T) {
+	orig := `{"hooks":{"SessionEnd":[{"hooks":[{"type":"command","command":"/usr/local/bin/harbormaster hook claude SessionEnd"}]}],"PreToolUse":[{"matcher":"Bash","hooks":[{"type":"command","command":"hm hook claude PreToolUse"}]}]}}`
+	dir := t.TempDir()
+	_ = os.WriteFile(filepath.Join(dir, "settings.json"), []byte(orig), 0o600)
+	r, err := install.ClaudeUninstall(opts(dir))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(r.Removed) != 2 {
+		t.Fatalf("expected both entries removed, got %+v", r)
+	}
+	m := readSettings(t, dir)
+	if hooks, ok := m["hooks"]; ok {
+		t.Fatalf("both events must be fully removed, got %v", hooks)
+	}
+}

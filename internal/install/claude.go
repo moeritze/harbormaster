@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"time"
@@ -14,6 +15,13 @@ import (
 
 // Marker prefixes every hook command harbormaster installs.
 const Marker = "harbormaster hook claude "
+
+// ourCommand matches exactly the command strings Claude() writes: an optional
+// absolute-path prefix, the harbormaster binary (by its full name or the "hm"
+// alias), then "hook claude <event>". Anything else — even a command that
+// merely contains Marker as a substring, such as a user's own script that
+// echoes it — is not ours.
+var ourCommand = regexp.MustCompile(`^(?:\S*/)?(?:harbormaster|hm) hook claude (?:SessionStart|PreToolUse|PostToolUse|SessionEnd)$`)
 
 // Options configure an install or uninstall.
 type Options struct {
@@ -60,7 +68,8 @@ func isOurs(entry map[string]any) bool {
 	hs, _ := entry["hooks"].([]any)
 	for _, h := range hs {
 		m, _ := h.(map[string]any)
-		if cmd, _ := m["command"].(string); strings.Contains(cmd, Marker) {
+		cmd, _ := m["command"].(string)
+		if ourCommand.MatchString(strings.TrimSpace(cmd)) {
 			return true
 		}
 	}
@@ -112,13 +121,9 @@ func Claude(o Options) (Report, error) {
 		return r, nil
 	}
 	if changed {
-		if _, err := os.Stat(r.Settings); err == nil {
+		if s.raw != nil {
 			r.Backup = fmt.Sprintf("%s.harbormaster-backup-%d", r.Settings, o.Now().Unix())
-			orig, err := os.ReadFile(r.Settings) //nolint:gosec // Settings is derived from the caller's configured ConfigDir
-			if err != nil {
-				return r, err
-			}
-			if err := os.WriteFile(r.Backup, orig, 0o600); err != nil { //nolint:gosec // Backup is built from Settings, itself derived from the caller's configured ConfigDir
+			if err := os.WriteFile(r.Backup, s.raw, 0o600); err != nil { //nolint:gosec // Backup is built from Settings, itself derived from the caller's configured ConfigDir
 				return r, err
 			}
 		}
