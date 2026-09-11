@@ -3,12 +3,14 @@ package runner_test
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"syscall"
 	"testing"
 	"time"
@@ -90,6 +92,7 @@ func TestRunRegistersInjectsPortAndUnregistersOnSignal(t *testing.T) {
 	t.Setenv("HM_TEST_LISTENER", "1")
 
 	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel) // don't leak the re-exec'd listener child if an assertion below fails first
 	done := make(chan struct{})
 	var code int
 	var runErr error
@@ -138,6 +141,7 @@ func TestRunCustomEnvName(t *testing.T) {
 	t.Setenv("HM_TEST_LISTENER", "1")
 	t.Setenv("HM_TEST_ENV_NAME", "VITE_PORT")
 	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel) // don't leak the re-exec'd listener child if an assertion below fails first
 	done := make(chan struct{})
 	go func() {
 		_, _ = runner.Run(ctx, a, runner.Options{Port: port, EnvNames: []string{"VITE_PORT"}, Args: listenerArgs(), ListenTimeout: 5 * time.Second, KillTimeout: 2 * time.Second}, register(a))
@@ -167,6 +171,82 @@ func TestRunPropagatesChildExitCode(t *testing.T) {
 	f, _ := a.Store.Load()
 	if len(f.Entries) != 0 {
 		t.Fatalf("entry should be removed after exit: %+v", f.Entries)
+	}
+}
+
+// TestRunTerminatesProcessGroupOnNaturalExit covers spec §6.1 step 5 for the
+// natural-exit path: when the group leader exits on its own (not via signal
+// or ctx cancellation), harbormaster must still terminate the process group
+// so worker processes a dev server spawned (e.g. Next.js) aren't orphaned.
+func TestRunTerminatesProcessGroupOnNaturalExit(t *testing.T) {
+	a, _ := newApp(t)
+	pidFile := filepath.Join(t.TempDir(), "child.pid")
+	// The backgrounded sleep redirects its own stdio to /dev/null rather than
+	// inheriting the test's pipe: exec.Cmd.Wait joins the goroutine copying a
+	// non-*os.File Stdout/Stderr, so if the worker kept that pipe's write end
+	// open past sh's exit, Wait would block for the worker's full lifetime
+	// (a well-known os/exec gotcha, golang.org/issue/23019) -- the opposite
+	// of what this test needs to observe promptly.
+	args := []string{"sh", "-c", fmt.Sprintf("sleep 30 </dev/null >/dev/null 2>&1 & echo $! > '%s'; exit 0", pidFile)}
+	code, err := runner.Run(context.Background(), a, runner.Options{Port: freePort(t), Args: args, ListenTimeout: time.Second, KillTimeout: 2 * time.Second}, register(a))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if code != 0 {
+		t.Fatalf("code %d, want 0", code)
+	}
+
+	b, err := os.ReadFile(pidFile) //nolint:gosec // test-owned tmp path, not user input
+	if err != nil {
+		t.Fatal(err)
+	}
+	workerPid, err := strconv.Atoi(strings.TrimSpace(string(b)))
+	if err != nil {
+		t.Fatalf("parse worker pid from %q: %v", b, err)
+	}
+
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) && (liveness.OS{}).PidAlive(workerPid) {
+		time.Sleep(50 * time.Millisecond)
+	}
+	if (liveness.OS{}).PidAlive(workerPid) {
+		t.Fatalf("worker pid %d still alive after group leader exited on its own", workerPid)
+	}
+}
+
+// TestRunRegisterFailureReapsPromptly covers Finding 2 from review round 1:
+// the reaper goroutine must start before register is called, so a failed
+// register terminates and drains a live child instead of burning the full
+// KillTimeout polling an unreaped zombie that alive() can't tell from live.
+func TestRunRegisterFailureReapsPromptly(t *testing.T) {
+	a, _ := newApp(t)
+	failRegister := func(int, int, string, string) (registry.Entry, error) {
+		return registry.Entry{}, errors.New("boom")
+	}
+	opts := runner.Options{Port: freePort(t), Args: []string{"sleep", "30"}, ListenTimeout: time.Second, KillTimeout: 5 * time.Second}
+
+	done := make(chan struct{})
+	var code int
+	var runErr error
+	start := time.Now()
+	go func() {
+		code, runErr = runner.Run(context.Background(), a, opts, failRegister)
+		close(done)
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("run did not return within 1s on register failure")
+	}
+	if elapsed := time.Since(start); elapsed > time.Second {
+		t.Fatalf("run took %s after register failure, want < 1s", elapsed)
+	}
+	if runErr == nil {
+		t.Fatal("expected a non-nil error on register failure")
+	}
+	if code != 4 {
+		t.Fatalf("code %d, want 4", code)
 	}
 }
 

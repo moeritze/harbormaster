@@ -58,20 +58,24 @@ func Run(ctx context.Context, a *app.App, opts Options, register Register) (int,
 	}
 	pid := cmd.Process.Pid
 
-	entry, err := register(opts.Port, pid, ident.RedactCmd(opts.Args), opts.Label)
-	if err != nil {
-		_ = Terminate(pid, true, opts.KillTimeout)
-		_ = cmd.Wait()
-		return 4, fmt.Errorf("register: %w", err)
-	}
-	defer unregister(a, entry)
-
+	// Start reaping immediately, before register: if register fails below,
+	// Terminate must race a concurrent Wait rather than an unreaped zombie.
+	// alive(pid) cannot tell a zombie from a live process, so without this
+	// the register-failure path would burn the full KillTimeout every time.
 	waitErr := make(chan error, 1)
 	done := make(chan struct{})
 	go func() {
 		waitErr <- cmd.Wait()
 		close(done)
 	}()
+
+	entry, err := register(opts.Port, pid, ident.RedactCmd(opts.Args), opts.Label)
+	if err != nil {
+		_ = Terminate(pid, true, opts.KillTimeout)
+		<-waitErr
+		return 4, fmt.Errorf("register: %w", err)
+	}
+	defer unregister(a, entry)
 
 	go warnIfNotListening(a, opts.Port, opts.ListenTimeout, done)
 
@@ -81,6 +85,18 @@ func Run(ctx context.Context, a *app.App, opts Options, register Register) (int,
 
 	select {
 	case err := <-waitErr:
+		// The child exited on its own; spec §6.1 step 5 ("on exit or on a
+		// signal, terminate the process group") applies here too, so a dev
+		// server's worker processes (e.g. Next.js) don't get orphaned when
+		// only the leader exits. Best-effort and cheap in the common case:
+		// the leader is already reaped, so kill(-pid, SIGTERM) either
+		// reaches surviving group members or returns ESRCH, and alive(pid)
+		// is false immediately -- no KillTimeout is burned. There is a
+		// theoretical pid-reuse window between the leader exiting and this
+		// call where -pid could in principle now name an unrelated process
+		// group; the same risk is already accepted by the signal/ctx.Done
+		// path below.
+		_ = Terminate(pid, true, opts.KillTimeout)
 		return exitCode(err), nil
 	case <-sigs:
 	case <-ctx.Done():
