@@ -9,6 +9,8 @@ import (
 	"strconv"
 	"strings"
 	"syscall"
+
+	"github.com/moeritze/harbormaster/internal/tools"
 )
 
 // PidAlive sends signal 0. EPERM means the process exists but belongs to someone else.
@@ -22,7 +24,11 @@ func (OS) PidAlive(pid int) bool {
 
 // PidUID returns the real uid of pid via ps.
 func PidUID(pid int) (int, error) {
-	out, err := exec.Command("ps", "-o", "uid=", "-p", strconv.Itoa(pid)).Output()
+	ps := tools.Path("ps")
+	if ps == "" {
+		return 0, errors.New("ps not found; refusing to guess a process owner")
+	}
+	out, err := exec.Command(ps, "-o", "uid=", "-p", strconv.Itoa(pid)).Output()
 	if err != nil {
 		return 0, err
 	}
@@ -37,7 +43,11 @@ func PidUID(pid int) (int, error) {
 // (ps's lstart column). Two processes that ever share a pid still differ
 // here, which is what lets a signal be refused after pid reuse.
 func PidStartTime(pid int) (string, error) {
-	out, err := exec.Command("ps", "-o", "lstart=", "-p", strconv.Itoa(pid)).Output()
+	ps := tools.Path("ps")
+	if ps == "" {
+		return "", errors.New("ps not found")
+	}
+	out, err := exec.Command(ps, "-o", "lstart=", "-p", strconv.Itoa(pid)).Output()
 	if err != nil {
 		return "", err
 	}
@@ -50,7 +60,11 @@ func PidStartTime(pid int) (string, error) {
 
 // PidOnPort finds the listening pid on a TCP port via lsof. ok=false if unknown.
 func PidOnPort(port int) (int, string, bool) {
-	out, err := exec.Command("lsof", "-nP", "-iTCP:"+strconv.Itoa(port), "-sTCP:LISTEN", "-Fpc").Output()
+	lsof := tools.Path("lsof")
+	if lsof == "" {
+		return 0, "", false
+	}
+	out, err := exec.Command(lsof, "-nP", "-iTCP:"+strconv.Itoa(port), "-sTCP:LISTEN", "-Fpc").Output()
 	if err != nil {
 		return 0, "", false
 	}
