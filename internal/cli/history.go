@@ -26,7 +26,7 @@ func newHistory(a *app.App) *cobra.Command {
 			tw := tabwriter.NewWriter(a.Stdout, 0, 0, 2, ' ', 0)
 			_, _ = fmt.Fprintln(tw, "AT\tPORT\tREASON\tAGENT\tWORKTREE\tLABEL")
 			for _, r := range recs {
-				_, _ = fmt.Fprintf(tw, "%s\t%d\t%s\t%s\t%s\t%s\n", r.At.Format("2006-01-02 15:04"), r.Port, r.Reason, render(r.Agent), shortPath(render(r.Worktree)), orDash(render(r.Label)))
+				_, _ = fmt.Fprintf(tw, "%s\t%d\t%s\t%s\t%s\t%s\n", r.At.Local().Format("2006-01-02 15:04 MST"), r.Port, r.Reason, render(r.Agent), shortPath(render(r.Worktree)), orDash(render(r.Label)))
 			}
 			return tw.Flush()
 		},

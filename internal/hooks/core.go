@@ -48,11 +48,14 @@ type Core struct {
 
 // New builds a Core from the app. Strict comes from HARBORMASTER_STRICT=1,
 // Disabled from HARBORMASTER_HOOKS=0.
-func New(a *app.App) *Core {
+func New(a *app.App) *Core { return NewWithEnv(a, os.Getenv) }
+
+// NewWithEnv is New with the environment lookup injected (tests).
+func NewWithEnv(a *app.App, getenv func(string) string) *Core {
 	return &Core{
 		App:         a,
-		Strict:      os.Getenv("HARBORMASTER_STRICT") == "1",
-		Disabled:    os.Getenv("HARBORMASTER_HOOKS") == "0",
+		Strict:      getenv("HARBORMASTER_STRICT") == "1",
+		Disabled:    getenv("HARBORMASTER_HOOKS") == "0",
 		KillTimeout: defaultKillTimeout,
 		GitDiscover: gitctx.Discover,
 	}
