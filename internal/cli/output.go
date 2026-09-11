@@ -81,9 +81,9 @@ func shortPath(p string) string {
 
 // ownerLine renders the actionable owner description used in errors.
 func ownerLine(e registry.Entry, now time.Time) string {
-	who := e.Agent
+	who := render(e.Agent)
 	if e.Session != "" {
-		who += " session " + shortSession(e.Session)
+		who += " session " + render(shortSession(e.Session))
 	}
 	where := shortPath(render(e.Worktree))
 	label := ""
@@ -102,7 +102,7 @@ func writeTable(w io.Writer, entries []registry.Entry, now time.Time) error {
 	_, _ = fmt.Fprintln(tw, "PORT\tPID\tAGENT\tSESSION\tWORKTREE\tBRANCH\tLABEL\tAGE")
 	for _, e := range entries {
 		_, _ = fmt.Fprintf(tw, "%d\t%d\t%s\t%s\t%s\t%s\t%s\t%s\n",
-			e.Port, e.PID, e.Agent, shortSession(e.Session), render(e.Worktree), orDash(render(e.Branch)), orDash(render(e.Label)), age(now, e.StartedAt))
+			e.Port, e.PID, render(e.Agent), render(shortSession(e.Session)), render(e.Worktree), orDash(render(e.Branch)), orDash(render(e.Label)), age(now, e.StartedAt))
 	}
 	return tw.Flush()
 }

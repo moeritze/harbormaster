@@ -126,7 +126,7 @@ func TestRenderSanitizesAndTruncates(t *testing.T) {
 func TestWriteTableRendersHostileFields(t *testing.T) {
 	now := time.Date(2026, 9, 10, 12, 0, 0, 0, time.UTC)
 	e := registry.Entry{
-		Port: 3000, PID: 7, Agent: "claude", Session: "s2",
+		Port: 3000, PID: 7, Agent: "cl\x1b[31maude", Session: "s\x1b[0m2",
 		Worktree:  "/wt/\x1b[31mevil",
 		Branch:    "feat/\x1b[2Jclear",
 		Label:     strings.Repeat("L", 300),
@@ -148,6 +148,9 @@ func TestWriteTableRendersHostileFields(t *testing.T) {
 	}
 	if !strings.Contains(out, "/wt/[31mevil") {
 		t.Fatalf("worktree text lost: %q", out)
+	}
+	if !strings.Contains(out, "cl[31maude") {
+		t.Fatalf("agent text lost: %q", out)
 	}
 
 	// ownerLine goes through the same filter.

@@ -432,3 +432,28 @@ func TestReleaseRegistryErrorExitsFour(t *testing.T) {
 		t.Fatalf("code %d err %v", c, err)
 	}
 }
+
+// TestReleaseSessionWithoutSessionRequiresForce is the --session form of H7:
+// naming a session id is not a way around the rule, and neither is standing
+// in the entry's worktree.
+func TestReleaseSessionWithoutSessionRequiresForce(t *testing.T) {
+	h := newHarness(t, "", "/wt/a")
+	h.seed(t, registry.Entry{ID: "x", Port: 3001, PID: 11, Session: "s2", Worktree: "/wt/a"})
+
+	err := h.run("release", "--session", "s2")
+	if c := exitCode(err); c != 1 || !strings.Contains(err.Error(), "no session id in the environment") {
+		t.Fatalf("code %d err %v", c, err)
+	}
+	f, _ := h.app.Store.Load()
+	if len(f.Entries) != 1 {
+		t.Fatalf("entry must survive a refused release: %+v", f.Entries)
+	}
+
+	if err := h.run("release", "--session", "s2", "--force"); err != nil {
+		t.Fatalf("--force should release: %v", err)
+	}
+	f, _ = h.app.Store.Load()
+	if len(f.Entries) != 0 {
+		t.Fatalf("%+v", f.Entries)
+	}
+}

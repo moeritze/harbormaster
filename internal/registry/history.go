@@ -88,8 +88,17 @@ func (s *Store) readHistoryLines() ([]string, int, error) {
 	}
 }
 
-// History returns the most recent limit records, oldest first. limit <= 0 means all.
+// History returns the most recent limit records, oldest first. limit <= 0
+// means all. It reads under the lock like every other path that touches the
+// state files, so it cannot observe history.jsonl mid-rename or race the
+// symlink check it makes before opening the file.
 func (s *Store) History(limit int) ([]HistoryRecord, error) {
+	unlock, err := lock(s.path(lockName), lockTimeout)
+	if err != nil {
+		return nil, err
+	}
+	defer unlock()
+
 	lines, _, err := s.readHistoryLines()
 	if err != nil {
 		return nil, err

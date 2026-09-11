@@ -24,9 +24,10 @@ supervisor, and signal handling in `kill`/`release`.
 - `claim <port> --pid P` registers P only when the OS shows P listening on
   that port. Registration is what licenses `kill` to signal a process, so an
   unverifiable pid is refused unless you pass `--force`.
-- `kill` and `release` (a port, or `--all-mine`) refuse a caller with no
-  session id unless `--force`. Ownership has to be claimed, not inherited
-  from being in the right directory.
+- Any `kill` or `release` refuses a caller with no session id unless
+  `--force` -- the port form, `--all-mine` and `--session <id>` alike.
+  Ownership has to be claimed, not inherited from being in the right
+  directory.
 - No network access beyond loopback liveness dials. No telemetry.
 - Registry and history are written to a fresh randomly named temp file opened
   with `O_EXCL`, fsynced, then renamed into place, so no predictable temp path

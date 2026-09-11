@@ -41,11 +41,11 @@ registration: harbormaster never signals a pid it has no entry for, so `claim`
 a server it did not start before killing it. Even `--force` never touches
 pid 1, your own pid, or another user's process.
 
-If you have no session id at all, `kill` and `release <port>` / `release
---all-mine` refuse to act on anything and tell you to set
-`HARBORMASTER_SESSION` (or pass `--force`). Reads -- `ls`, `check`, `run`'s
-conflict check -- still fall back to matching the worktree, so nothing about
-the day-to-day flow changes.
+If you have no session id at all, any `kill` or `release` refuses to act on
+anything -- the port form, `--all-mine` and `--session <id>` alike -- and tells
+you to set `HARBORMASTER_SESSION` (or pass `--force`). Reads -- `ls`, `check`,
+`run`'s conflict check -- still fall back to matching the worktree, so nothing
+about the day-to-day flow changes.
 
 `claim <port> --pid P` registers P only if the OS agrees that P is the process
 listening on that port; `claim --force` registers it anyway, which you need
