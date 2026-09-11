@@ -25,8 +25,8 @@ func ConfigFromEnv(getenv func(string) string) (Config, error) {
 	}
 	if v := getenv("HARBORMASTER_RANGE"); v != "" {
 		n, err := strconv.Atoi(v)
-		if err != nil || n < 1 {
-			return c, fmt.Errorf("HARBORMASTER_RANGE must be >= 1, got %q", v)
+		if err != nil || n < 1 || n > 65535 {
+			return c, fmt.Errorf("HARBORMASTER_RANGE must be 1-65535, got %q", v)
 		}
 		c.Range = n
 	}
@@ -38,14 +38,20 @@ func ConfigFromEnv(getenv func(string) string) (Config, error) {
 
 // Deterministic maps key to a stable port inside the window.
 func Deterministic(key string, c Config) int {
+	if c.Range <= 0 {
+		return c.Base
+	}
 	h := fnv.New64a()
 	_, _ = h.Write([]byte(key))
-	return c.Base + int(h.Sum64()%uint64(c.Range)) //nolint:gosec // range is validated 1..65535 by ConfigFromEnv
+	return c.Base + int(h.Sum64()%uint64(c.Range)) //nolint:gosec // range is guarded above and validated by ConfigFromEnv
 }
 
 // Resolve returns the deterministic port or the next free one above it,
 // wrapping around inside the window. taken reports registry or OS conflicts.
 func Resolve(key string, c Config, taken func(int) bool) (int, error) {
+	if c.Range <= 0 {
+		return 0, fmt.Errorf("invalid port window: range %d", c.Range)
+	}
 	start := Deterministic(key, c)
 	for i := 0; i < c.Range; i++ {
 		p := c.Base + (start-c.Base+i)%c.Range
