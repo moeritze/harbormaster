@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"path/filepath"
+	"reflect"
 	"strconv"
 	"strings"
 	"text/tabwriter"
@@ -13,7 +14,14 @@ import (
 	"github.com/moeritze/harbormaster/internal/registry"
 )
 
+// writeJSON encodes v as indented JSON. A nil slice encodes as an empty
+// array ([]) rather than JSON null, since machine consumers of --json
+// output expect an array even when the result set is empty.
 func writeJSON(w io.Writer, v any) error {
+	rv := reflect.ValueOf(v)
+	if rv.Kind() == reflect.Slice && rv.IsNil() {
+		v = reflect.MakeSlice(rv.Type(), 0, 0).Interface()
+	}
 	enc := json.NewEncoder(w)
 	enc.SetIndent("", "  ")
 	return enc.Encode(v)

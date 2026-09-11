@@ -89,6 +89,10 @@ func TestLsEmptyAndTable(t *testing.T) {
 	if !strings.Contains(h.out.String(), "no registered servers") {
 		t.Fatalf("%q", h.out.String())
 	}
+	_ = h.run("ls", "--json")
+	if got := strings.TrimSpace(h.out.String()); got != "[]" {
+		t.Fatalf("empty ls --json = %q, want %q", got, "[]")
+	}
 	h.seed(t, registry.Entry{ID: "x", Port: 3000, PID: 10, Agent: "claude", Session: "s2", Worktree: "/wt/b", Branch: "other", Label: "login flow"})
 	_ = h.run("ls")
 	s := h.out.String()
@@ -194,6 +198,13 @@ func TestReleaseJSON(t *testing.T) {
 	var rows []registry.Entry
 	if err := json.Unmarshal(h.out.Bytes(), &rows); err != nil || len(rows) != 1 || rows[0].Port != 3001 {
 		t.Fatalf("json: %v %s", err, h.out.String())
+	}
+
+	if err := h.run("release", "--session", "nomatch", "--json"); err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.TrimSpace(h.out.String()); got != "[]" {
+		t.Fatalf("empty release --json = %q, want %q", got, "[]")
 	}
 }
 
