@@ -25,7 +25,7 @@ func NewRoot(a *app.App) *cobra.Command {
 	root.AddCommand(&cobra.Command{
 		Use:   "version",
 		Short: "Print version",
-		RunE: func(cmd *cobra.Command, _ []string) error {
+		RunE: func(_ *cobra.Command, _ []string) error {
 			_, err := fmt.Fprintf(a.Stdout, "harbormaster %s\n", Version)
 			return err
 		},
