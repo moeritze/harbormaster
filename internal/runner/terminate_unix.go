@@ -22,11 +22,22 @@ func setProcessGroup(cmd *exec.Cmd) {
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 }
 
+// target picks the signal target. A group signal is only sent when pid is
+// actually a process-group leader (Getpgid(pid) == pid); anything else --
+// a claimed pid that never called setpgid, or a reused pid inside some
+// unrelated group -- is signalled on its own.
 func target(pid int, group bool) int {
-	if group {
-		return -pid
+	if !group {
+		return pid
 	}
-	return pid
+	// Getpgid fails once the leader has been reaped; the orphaned group may
+	// still hold workers, and kill(-pid) is exactly what reaches them, so an
+	// error keeps the group target. Only a live pid that answers with a
+	// different group id is downgraded to a single-pid signal.
+	if pgid, err := unix.Getpgid(pid); err == nil && pgid != pid {
+		return pid
+	}
+	return -pid
 }
 
 func sendTerm(pid int, group bool) error {

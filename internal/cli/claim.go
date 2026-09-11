@@ -97,5 +97,6 @@ func newEntry(a *app.App, port, pid int, cmdLine, label string) registry.Entry {
 		Label:     ident.Sanitize(label),
 		StartedAt: a.Clock(),
 		HostUser:  a.Ident.HostUser,
+		StartTime: startTimeOf(a, pid),
 	}
 }

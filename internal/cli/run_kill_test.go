@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"syscall"
 	"testing"
@@ -246,5 +247,37 @@ func TestRunRejectsInvalidEnvNames(t *testing.T) {
 	h := newHarness(t, "s1", "/wt/a")
 	if err := h.run("run", "--port", "3999", "--env", "API_PORT", "--", "true"); err != nil {
 		t.Fatalf("a valid name must be accepted: %v", err)
+	}
+}
+
+// TestKillRefusesReusedPid: an entry whose recorded start time no longer
+// matches the live process is a reused pid and must not be signalled.
+func TestKillRefusesReusedPid(t *testing.T) {
+	h := newHarness(t, "s1", "/wt/a")
+	h.app.PidStartTime = func(int) (string, error) { return "Thu Sep 11 10:00:00 2026", nil }
+	h.seed(t, registry.Entry{ID: "reused", Port: 3300, PID: 4242, Session: "s1", StartTime: "Mon Jan  1 00:00:00 2024"})
+	err := h.run("kill", "3300")
+	if c := exitCode(err); c != 1 || !strings.Contains(err.Error(), "reused") {
+		t.Fatalf("code %d err %v", c, err)
+	}
+	f, _ := h.app.Store.Peek()
+	if len(f.Entries) != 1 {
+		t.Fatalf("entry must survive a refused kill: %+v", f.Entries)
+	}
+}
+
+// TestNewEntryRecordsStartTime: claim writes the process start time.
+func TestNewEntryRecordsStartTime(t *testing.T) {
+	h := newHarness(t, "s1", "/wt/a")
+	h.app.PidStartTime = func(pid int) (string, error) { return "start-" + strconv.Itoa(pid), nil }
+	h.app.PidOnPort = func(p int) (int, string, bool) { return 77, "node", p == 3301 }
+	h.prober.alive[77] = true
+	h.prober.listening[3301] = true
+	if err := h.run("claim", "3301", "--pid", "77"); err != nil {
+		t.Fatal(err)
+	}
+	f, _ := h.app.Store.Peek()
+	if len(f.Entries) != 1 || f.Entries[0].StartTime != "start-77" {
+		t.Fatalf("%+v", f.Entries)
 	}
 }

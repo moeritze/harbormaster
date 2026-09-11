@@ -18,3 +18,6 @@ func (OS) PidAlive(pid int) bool {
 func PidUID(int) (int, error) { return 0, errors.New("PidUID not supported on windows") }
 
 func PidOnPort(int) (int, string, bool) { return 0, "", false }
+
+// PidStartTime is unavailable on windows; an empty value disables the check.
+func PidStartTime(int) (string, error) { return "", nil }
