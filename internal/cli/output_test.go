@@ -1,8 +1,12 @@
 package cli
 
 import (
+	"bytes"
+	"strings"
 	"testing"
 	"time"
+
+	"github.com/moeritze/harbormaster/internal/registry"
 )
 
 func TestAgeBuckets(t *testing.T) {
@@ -61,6 +65,16 @@ func TestShortPath(t *testing.T) {
 				t.Fatalf("shortPath(%q) = %q, want %q", c.in, got, c.want)
 			}
 		})
+	}
+}
+
+func TestWriteJSONEncodesNilSliceAsEmptyArray(t *testing.T) {
+	var buf bytes.Buffer
+	if err := writeJSON(&buf, []registry.Entry(nil)); err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.TrimSpace(buf.String()); got != "[]" {
+		t.Fatalf("got %q, want %q", got, "[]")
 	}
 }
 
