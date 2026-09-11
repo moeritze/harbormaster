@@ -147,6 +147,23 @@ func (s *Store) Load() (*File, error) {
 	return &cp, nil
 }
 
+// Peek returns the registry as stored, without pruning or probing. Hooks
+// use it because they must answer in milliseconds; entries may be stale.
+func (s *Store) Peek() (*File, error) {
+	unlock, err := lock(s.path(lockName), lockTimeout)
+	if err != nil {
+		return nil, err
+	}
+	defer unlock()
+	f, err := s.read()
+	if err != nil {
+		return nil, err
+	}
+	cp := *f
+	cp.Entries = append([]Entry(nil), f.Entries...)
+	return &cp, nil
+}
+
 // Prune removes dead entries now and returns what was pruned.
 func (s *Store) Prune() ([]HistoryRecord, error) {
 	unlock, err := lock(s.path(lockName), lockTimeout)
