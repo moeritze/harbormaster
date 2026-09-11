@@ -34,8 +34,10 @@ supervisor, and signal handling in `kill`/`release`.
   can be pre-planted. If `registry.json` or `history.jsonl` is a symlink,
   harbormaster refuses to read or write it. Both files are mode 0600.
 - The state directory is created mode 0700. An existing one is validated, not
-  repaired: a symlink, a directory writable by group or other, or one owned by
-  another user is refused with the `chmod` that fixes it.
+  repaired. A directory writable by group or other is refused with the `chmod`
+  that fixes it. A symlinked directory, or one owned by another user, is
+  refused outright -- there is no mode to correct: move the state dir or set
+  `HARBORMASTER_HOME` to one you own.
 - Values that other sessions wrote (worktree, repo, branch, command, label)
   and process names read from the OS are stripped of control characters and
   truncated before being printed, so a registry row cannot inject terminal
