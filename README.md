@@ -107,6 +107,17 @@ without uninstalling them: every deny and ask becomes an allow whose reason is
 attached as context instead. Every deny and ask reason names this escape hatch,
 so a session that hits a wrong decision can always get past it.
 
+A `--project` install writes the bare name `harbormaster` into a file that gets
+committed, because this machine's absolute path is wrong in every other
+checkout. That only works if the agent can find the binary: an app launched
+from the Dock, Spotlight or a `.desktop` entry runs no login shell, so its PATH
+is roughly `/usr/bin:/bin:/usr/local/bin:/opt/homebrew/bin` -- without
+`~/.local/bin`, `~/go/bin` or any version manager's shims. `install --project`
+checks those directories and warns when the bare name is not there; if you see
+that warning and the hooks do not fire, reinstall with
+`--command /absolute/path/to/harbormaster` (pinned to this machine) or put the
+binary somewhere on that PATH.
+
 The same files are available as a plugin in `adapters/claude-plugin/` (`claude --plugin-dir adapters/claude-plugin`).
 
 ## Cursor and other agents
@@ -116,7 +127,44 @@ The same files are available as a plugin in `adapters/claude-plugin/` (`claude -
     harbormaster install agents-md           # AGENTS.md block in the current directory (Codex, Cursor, others)
     harbormaster uninstall cursor|agents-md  # remove exactly what was added
 
-Cursor hooks (verified against https://cursor.com/docs/hooks): `sessionStart` injects the registry and exports `HARBORMASTER_SESSION` into the agent's shell so its `harbormaster run`/`kill` calls are owned by that conversation; `beforeShellExecution` denies kills of ports other sessions own and asks on blind kills (`pkill`, `killall`); `sessionEnd` releases and stops the conversation's own servers. Cursor documents no "no opinion" answer for shell hooks, so harbormaster prints nothing on allow and the wrap-your-server nudge is not delivered to Cursor; the rule file and the session-start context carry that guidance. OpenAI Codex documents hooks too (https://learn.chatgpt.com/docs/hooks), but their decision payloads are not yet verified, so Codex gets the AGENTS.md block for now.
+Cursor hooks (verified against https://cursor.com/docs/hooks on 2026-09-11):
+`sessionStart` injects the registry and this worktree's port; `beforeShellExecution`
+denies kills of ports other sessions own and asks on blind kills (`pkill`,
+`killall`); `sessionEnd` releases the conversation's entries. Cursor documents no
+"no opinion" answer for shell hooks, so harbormaster prints nothing on allow and
+the wrap-your-server nudge is not delivered to Cursor; the rule file and the
+session-start context carry that guidance. `afterShellExecution` is not installed:
+it has no output fields, so there is nowhere to put the answer.
+
+Two Cursor-specific behaviours are worth knowing:
+
+- **Identity.** `sessionStart`'s `env` output is handed to *subsequent hook
+  executions* only -- it does not reach the shell the agent runs commands in, so
+  it cannot make the agent's own `harbormaster run` calls carry the conversation
+  id. The session-start context therefore spells out the one command that does:
+  `HARBORMASTER_SESSION=<conversation_id> harbormaster run --label "<task>" -- <command>`.
+  Failing that, harbormaster treats a server registered from a plain shell (agent
+  `human`) *in the same worktree* as belonging to the conversation, so the agent
+  can still manage what it just started. Servers in other worktrees, and servers
+  owned by another agent session, stay foreign.
+- **Session end never kills.** Cursor's `sessionEnd` fires once per conversation
+  with `reason` in `completed | aborted | error | window_close | user_close`;
+  "completed" is the ordinary end of a piece of work, and the per-turn event is
+  `stop`, which harbormaster does not hook. So for Cursor the hook releases the
+  registry entries and stops nothing -- a dev server you are still looking at
+  survives the conversation that started it. Stop it yourself with
+  `harbormaster kill <port>`. (Claude Code's `SessionEnd` does stop the session's
+  own servers, as before.)
+
+Cursor deny and ask reasons name the escape hatch that works there: remove the
+harbormaster entries from `~/.cursor/hooks.json`, or launch Cursor with
+`HARBORMASTER_HOOKS=0` in its environment.
+
+The `--command` note above applies to `install cursor --project` in exactly the
+same way: Cursor is a GUI app, so a bare `harbormaster` it cannot find means
+hooks that never fire, and `install --project` warns when that is the case.
+
+OpenAI Codex documents hooks too (https://learn.chatgpt.com/docs/hooks), but their decision payloads are not yet verified, so Codex gets the AGENTS.md block for now.
 
 ## Security
 
