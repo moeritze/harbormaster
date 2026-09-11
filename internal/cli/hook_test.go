@@ -92,6 +92,9 @@ func TestHookClaudeBlindKillAsks(t *testing.T) {
 	if !strings.Contains(out, `"permissionDecision":"ask"`) || !strings.Contains(out, "3100") {
 		t.Fatalf("%s", out)
 	}
+	if !strings.Contains(out, "HARBORMASTER_HOOKS=0") {
+		t.Fatalf("an ask must advertise the override: %s", out)
+	}
 }
 
 // TestHookClaudeSessionEndClearKeepsServers: /clear is not the end of a
