@@ -37,8 +37,22 @@ type App struct {
 	PidOnPort func(port int) (int, string, bool)
 }
 
+// Options tune how New builds the App.
+type Options struct {
+	// SkipGit leaves Git zero instead of discovering it. gitctx.Discover
+	// forks `git` three times, which no hook invocation can afford on the
+	// path Claude Code runs before every shell command; the hook core
+	// discovers git lazily, only for the rare decision that needs it.
+	SkipGit bool
+}
+
 // New builds an App from the environment and current directory.
 func New(getenv func(string) string, stdout, stderr io.Writer) (*App, error) {
+	return NewWithOptions(getenv, stdout, stderr, Options{})
+}
+
+// NewWithOptions is New with the knobs in Options.
+func NewWithOptions(getenv func(string) string, stdout, stderr io.Writer, o Options) (*App, error) {
 	cwd, err := os.Getwd()
 	if err != nil {
 		return nil, err
@@ -57,11 +71,15 @@ func New(getenv func(string) string, stdout, stderr io.Writer) (*App, error) {
 	if err != nil {
 		return nil, err
 	}
+	git := gitctx.Context{}
+	if !o.SkipGit {
+		git = gitctx.Discover(cwd)
+	}
 	return &App{
 		Stdout: stdout, Stderr: stderr, Stdin: os.Stdin, Now: now,
 		Store: store, Prober: prober,
 		Ident:     ident.Detect(getenv, hostUser, os.Getppid()),
-		Git:       gitctx.Discover(cwd),
+		Git:       git,
 		Ports:     pc,
 		Cwd:       cwd,
 		PidOnPort: liveness.PidOnPort,

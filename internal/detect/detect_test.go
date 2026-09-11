@@ -2,7 +2,9 @@ package detect_test
 
 import (
 	"reflect"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/moeritze/harbormaster/internal/detect"
 )
@@ -37,6 +39,9 @@ func TestClassify(t *testing.T) {
 		{"kill -s TERM 123", detect.Kill, nil, []int{123}, false},
 		{"hm kill 3000 && kill -9 1234", detect.Kill, []int{3000}, []int{1234}, false},
 		{"hm ls; pkill -f node", detect.Kill, nil, nil, false},
+		// Only harbormaster's own subcommands are blanked out: "hm x" is
+		// some other program (or a typo), and the kill after it is real.
+		{"hm x lsof -ti:3100 | xargs kill", detect.Kill, []int{3100}, nil, false},
 		// server start, unwrapped
 		{"npm run dev", detect.ServerStart, nil, nil, false},
 		{"npm run dev -- --port 3001", detect.ServerStart, []int{3001}, nil, false},
@@ -101,6 +106,26 @@ func TestClassify(t *testing.T) {
 		if got.Wrapped != c.wrapped {
 			t.Errorf("%q: wrapped %v, want %v", c.cmd, got.Wrapped, c.wrapped)
 		}
+	}
+}
+
+// TestClassifyCapsScannedInput: Classify runs on the PreToolUse hot path,
+// before every shell command. A generated one-liner or an inlined heredoc
+// can be megabytes long; a dozen regexes over all of it would show up as
+// latency on every command, so only the first 16 KiB is inspected -- which
+// is still far past where any of these patterns can match.
+func TestClassifyCapsScannedInput(t *testing.T) {
+	cmd := "npm run dev " + strings.Repeat("#", 100*1024)
+	start := time.Now()
+	const iterations = 20
+	for range iterations {
+		if got := detect.Classify(cmd); got.Class != detect.ServerStart {
+			t.Fatalf("class %v, want server_start", got.Class)
+		}
+	}
+	budget := 10 * time.Millisecond * raceBudget
+	if avg := time.Since(start) / iterations; avg > budget {
+		t.Fatalf("Classify averaged %s on a 100 KB command (budget %s); the input cap is not working", avg, budget)
 	}
 }
 

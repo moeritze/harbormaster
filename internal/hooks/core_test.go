@@ -26,6 +26,9 @@ type h struct {
 	now    time.Time
 	log    *bytes.Buffer
 	prober *fakeProber
+	// git counts how often the core asked for a git context. The hot path
+	// (a shell command that is not about a port) must never make it move.
+	git *int
 }
 
 func newH(t *testing.T) *h {
@@ -45,7 +48,9 @@ func newH(t *testing.T) *h {
 	c := hooks.New(a)
 	c.Log = log
 	c.KillTimeout = 200 * time.Millisecond
-	return &h{core: c, st: st, now: now, log: log, prober: pr}
+	gitCalls := 0
+	c.GitDiscover = func(string) gitctx.Context { gitCalls++; return gitctx.Context{} }
+	return &h{core: c, st: st, now: now, log: log, prober: pr, git: &gitCalls}
 }
 
 func (x *h) seed(t *testing.T, e registry.Entry) {
@@ -263,5 +268,33 @@ func TestErrorsFailOpenAndLog(t *testing.T) {
 	r := x.core.Handle(ev(hooks.PreShell, "me", "kill 1"))
 	if r.Decision != hooks.Allow || x.log.Len() == 0 {
 		t.Fatalf("%+v log=%q", r, x.log.String())
+	}
+}
+
+// TestPreShellDoesNotDiscoverGitOnTheHotPath: gitctx.Discover forks git
+// three times. The PreToolUse hook runs before every shell command a
+// session issues, so neither the silent-allow path nor a deny decided by
+// session id may pay for it; session start, which prints this worktree's
+// port, legitimately does.
+func TestPreShellDoesNotDiscoverGitOnTheHotPath(t *testing.T) {
+	x := newH(t)
+	if r := x.core.Handle(ev(hooks.PreShell, "me", "git status")); r.Decision != hooks.Allow || r.Context != "" {
+		t.Fatalf("%+v", r)
+	}
+	if *x.git != 0 {
+		t.Fatalf("silent allow discovered git %d times", *x.git)
+	}
+	x.seed(t, registry.Entry{ID: "a", Port: 3100, PID: 41, Agent: "claude", Session: "other"})
+	if r := x.core.Handle(ev(hooks.PreShell, "me", "kill -9 41")); r.Decision != hooks.Deny {
+		t.Fatalf("%+v", r)
+	}
+	if *x.git != 0 {
+		t.Fatalf("deny by session discovered git %d times", *x.git)
+	}
+	if r := x.core.Handle(ev(hooks.SessionStart, "me", "")); r.Decision != hooks.Allow {
+		t.Fatalf("%+v", r)
+	}
+	if *x.git == 0 {
+		t.Fatal("session start must resolve git to report this worktree's port")
 	}
 }
