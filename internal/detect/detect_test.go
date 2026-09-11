@@ -34,6 +34,9 @@ func TestClassify(t *testing.T) {
 		{"kill-port 8080", detect.Kill, []int{8080}, nil, false},
 		{"cd app && lsof -ti:5173 | xargs kill", detect.Kill, []int{5173}, nil, false},
 		{"pkill -f 'vite --port 5173'", detect.Kill, []int{5173}, nil, false},
+		{"kill -s TERM 123", detect.Kill, nil, []int{123}, false},
+		{"hm kill 3000 && kill -9 1234", detect.Kill, []int{3000}, []int{1234}, false},
+		{"hm ls; pkill -f node", detect.Kill, nil, nil, false},
 		// server start, unwrapped
 		{"npm run dev", detect.ServerStart, nil, nil, false},
 		{"npm run dev -- --port 3001", detect.ServerStart, []int{3001}, nil, false},
@@ -66,6 +69,7 @@ func TestClassify(t *testing.T) {
 		{"npm run dev > dev.log 2>&1 &", detect.ServerStart, nil, nil, false},
 		// wrapped
 		{"hm run --label x -- npm run dev", detect.ServerStart, nil, nil, true},
+		{"hm run -- npm run dev", detect.ServerStart, nil, nil, true},
 		{"harbormaster run -- npm run dev", detect.ServerStart, nil, nil, true},
 		{"harbormaster run --port 3000 -- vite", detect.ServerStart, []int{3000}, nil, true},
 		// none
@@ -79,6 +83,8 @@ func TestClassify(t *testing.T) {
 		{"hm ls", detect.None, nil, nil, false},
 		{"hm kill 3000", detect.None, []int{3000}, nil, false},
 		{"docker compose up", detect.None, nil, nil, false},
+		{"mkdir -p 3000", detect.None, nil, nil, false},
+		{"docker run -p 8080:80 nginx", detect.None, nil, nil, false},
 		{"", detect.None, nil, nil, false},
 	}
 	for _, c := range cases {
