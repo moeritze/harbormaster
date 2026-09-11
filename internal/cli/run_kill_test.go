@@ -29,6 +29,18 @@ func TestRunRefusesUnregisteredListener(t *testing.T) {
 	}
 }
 
+// TestRunRefusesDuplicateOwnRegistration covers Finding 1: a second `run` on
+// a port this same session already registered must be refused, not appended
+// as a second entry.
+func TestRunRefusesDuplicateOwnRegistration(t *testing.T) {
+	h := newHarness(t, "s1", "/wt/a")
+	h.seed(t, registry.Entry{ID: "mine", Port: 3000, PID: 123, Session: "s1"})
+	err := h.run("run", "--port", "3000", "--", "true")
+	if c := exitCode(err); c != 1 || !strings.Contains(err.Error(), "already registered") {
+		t.Fatalf("code %d err %v", c, err)
+	}
+}
+
 func TestRunRequiresCommand(t *testing.T) {
 	h := newHarness(t, "s1", "/wt/a")
 	if c := exitCode(h.run("run", "--port", "3000")); c != 3 {
