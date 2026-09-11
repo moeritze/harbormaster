@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"text/tabwriter"
 	"time"
@@ -91,8 +92,8 @@ func findByPort(f *registry.File, port int) (registry.Entry, bool) {
 }
 
 func parsePort(s string) (int, error) {
-	var p int
-	if _, err := fmt.Sscanf(s, "%d", &p); err != nil || p < 1 || p > 65535 {
+	p, err := strconv.Atoi(s)
+	if err != nil || p < 1 || p > 65535 {
 		return 0, exitf(ExitUsage, "invalid port %q", s)
 	}
 	return p, nil

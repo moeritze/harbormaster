@@ -14,6 +14,7 @@ import (
 func newClaim(a *app.App) *cobra.Command {
 	var pid int
 	var label string
+	var asJSON bool
 	cmd := &cobra.Command{
 		Use:   "claim <port>",
 		Short: "Register a server you started without `run`",
@@ -33,20 +34,31 @@ func newClaim(a *app.App) *cobra.Command {
 			if !a.Prober.PidAlive(pid) {
 				return exitf(ExitUsage, "pid %d is not running", pid)
 			}
-			return a.Store.Update(func(f *registry.File) error {
+			var created registry.Entry
+			err = a.Store.Update(func(f *registry.File) error {
 				if e, ok := findByPort(f, port); ok {
 					if ident.Owns(a.Ident, e, a.Git.Worktree) {
 						return exitf(ExitDenied, "port %d already registered by you (pid %d)", port, e.PID)
 					}
 					return exitf(ExitDenied, "port %d owned by %s", port, ownerLine(e, a.Clock()))
 				}
-				f.Entries = append(f.Entries, newEntry(a, port, pid, fmt.Sprintf("claimed pid %d", pid), label))
+				created = newEntry(a, port, pid, fmt.Sprintf("claimed pid %d", pid), label)
+				f.Entries = append(f.Entries, created)
 				return nil
 			})
+			if err != nil {
+				return err
+			}
+			if asJSON {
+				return writeJSON(a.Stdout, created)
+			}
+			_, err = fmt.Fprintf(a.Stdout, "claimed port %d (pid %d, id %s)\n", port, pid, created.ID)
+			return err
 		},
 	}
 	cmd.Flags().IntVar(&pid, "pid", 0, "pid listening on the port (default: detect)")
 	cmd.Flags().StringVar(&label, "label", "", "what this server is for")
+	cmd.Flags().BoolVar(&asJSON, "json", false, "machine-readable output")
 	return cmd
 }
 

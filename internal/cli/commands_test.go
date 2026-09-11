@@ -136,6 +136,9 @@ func TestCheckExitCodes(t *testing.T) {
 	if c := exitCode(h.run("check", "abc")); c != 3 {
 		t.Fatalf("usage: %d", c)
 	}
+	if c := exitCode(h.run("check", "3000abc")); c != 3 {
+		t.Fatalf("usage (trailing garbage): %d", c)
+	}
 }
 
 func TestClaimAndRelease(t *testing.T) {
@@ -144,6 +147,10 @@ func TestClaimAndRelease(t *testing.T) {
 	h.prober.listening[3005] = true
 	if err := h.run("claim", "3005", "--pid", "42", "--label", "manual"); err != nil {
 		t.Fatal(err)
+	}
+	out := h.out.String()
+	if !strings.Contains(out, "claimed port 3005") || !strings.Contains(out, "pid 42") {
+		t.Fatalf("claim output %q", out)
 	}
 	f, _ := h.app.Store.Load()
 	if len(f.Entries) != 1 || f.Entries[0].PID != 42 || f.Entries[0].Session != "s1" || f.Entries[0].Label != "manual" {
@@ -162,6 +169,31 @@ func TestClaimAndRelease(t *testing.T) {
 	hist, _ := h.app.Store.History(0)
 	if len(hist) != 1 || hist[0].Reason != "released" {
 		t.Fatalf("history %+v", hist)
+	}
+}
+
+func TestClaimJSON(t *testing.T) {
+	h := newHarness(t, "s1", "/wt/a")
+	h.prober.alive[43] = true
+	h.prober.listening[3006] = true
+	if err := h.run("claim", "3006", "--pid", "43", "--json"); err != nil {
+		t.Fatal(err)
+	}
+	var e registry.Entry
+	if err := json.Unmarshal(h.out.Bytes(), &e); err != nil || e.Port != 3006 || e.PID != 43 {
+		t.Fatalf("json: %v %s", err, h.out.String())
+	}
+}
+
+func TestReleaseJSON(t *testing.T) {
+	h := newHarness(t, "s1", "/wt/a")
+	h.seed(t, registry.Entry{ID: "a", Port: 3001, PID: 11, Session: "s1"})
+	if err := h.run("release", "3001", "--json"); err != nil {
+		t.Fatal(err)
+	}
+	var rows []registry.Entry
+	if err := json.Unmarshal(h.out.Bytes(), &rows); err != nil || len(rows) != 1 || rows[0].Port != 3001 {
+		t.Fatalf("json: %v %s", err, h.out.String())
 	}
 }
 
@@ -204,8 +236,19 @@ func TestGcReportsPruned(t *testing.T) {
 	if err := h.run("gc"); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(h.out.String(), "pruned 1") {
-		t.Fatalf("%q", h.out.String())
+	out := h.out.String()
+	if !strings.Contains(out, "pruned 1") || !strings.Contains(out, "3001") || !strings.Contains(out, "pid_dead") {
+		t.Fatalf("%q", out)
+	}
+
+	h.seed(t, registry.Entry{ID: "dead2", Port: 3002, PID: 12, Session: "s1"})
+	h.prober.alive[12] = false
+	if err := h.run("gc", "--json"); err != nil {
+		t.Fatal(err)
+	}
+	var recs []registry.HistoryRecord
+	if err := json.Unmarshal(h.out.Bytes(), &recs); err != nil || len(recs) != 1 || recs[0].Port != 3002 {
+		t.Fatalf("json: %v %s", err, h.out.String())
 	}
 }
 
