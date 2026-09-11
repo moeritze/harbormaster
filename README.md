@@ -71,9 +71,10 @@ State lives in the first of these that is set:
 
 It holds `registry.json`, `history.jsonl`, and the `registry.lock` flock
 target. harbormaster creates the directory with mode 0700 and never re-chmods
-an existing one: if it finds a symlink, a directory group or other can write,
-or one owned by another user, it refuses to run and says which `chmod` fixes
-it.
+an existing one. A directory group or other can write is refused with the
+`chmod` that fixes it; a symlinked directory, or one owned by another user, is
+refused outright -- move the state dir or set `HARBORMASTER_HOME` to one you
+own.
 
 ## Security
 
