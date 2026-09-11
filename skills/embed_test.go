@@ -16,3 +16,13 @@ func TestEmbeddedSkillHasFrontmatter(t *testing.T) {
 		t.Fatal("skill must stay short (< 120 lines)")
 	}
 }
+
+func TestCursorRuleHasMdcFrontmatter(t *testing.T) {
+	r := string(skills.CursorRule())
+	if !strings.HasPrefix(r, "---\ndescription: ") || !strings.Contains(r, "\nalwaysApply: false\n---\n") {
+		t.Fatalf("bad frontmatter:\n%s", r[:min(len(r), 200)])
+	}
+	if strings.Contains(r, "name: harbormaster") || !strings.Contains(r, "harbormaster run") {
+		t.Fatalf("body/frontmatter mix-up:\n%s", r[:min(len(r), 300)])
+	}
+}

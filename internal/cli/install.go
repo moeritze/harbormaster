@@ -26,6 +26,17 @@ func claudeConfigDir(project string) (string, error) {
 	return filepath.Join(home, ".claude"), nil
 }
 
+func cursorConfigDir(project string) (string, error) {
+	if project != "" {
+		return filepath.Join(project, ".cursor"), nil
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(home, ".cursor"), nil
+}
+
 func defaultCommand() string {
 	if exe, err := os.Executable(); err == nil {
 		if abs, err := filepath.EvalSymlinks(exe); err == nil {
@@ -36,37 +47,70 @@ func defaultCommand() string {
 	return "harbormaster"
 }
 
+const supportedAgents = "claude, cursor, agents-md"
+
 func newInstall(a *app.App, uninstall bool) *cobra.Command {
 	var project, command string
 	var dryRun bool
-	use, short := "install <agent>", "Install hooks and the skill for an agent (claude)"
+	use, short := "install <agent>", "Install hooks and the skill for an agent ("+supportedAgents+")"
 	if uninstall {
-		use, short = "uninstall <agent>", "Remove the hooks and skill harbormaster installed"
+		use, short = "uninstall <agent>", "Remove the hooks and skill harbormaster installed ("+supportedAgents+")"
 	}
 	cmd := &cobra.Command{
 		Use:   use,
 		Short: short,
 		Args:  cobra.ExactArgs(1),
 		RunE: func(c *cobra.Command, args []string) error {
-			if args[0] != "claude" {
-				return exitf(ExitUsage, "unsupported agent %q (supported: claude)", args[0])
-			}
-			dir, err := claudeConfigDir(project)
-			if err != nil {
-				return exitf(ExitUsage, "%v", err)
-			}
 			// A --project install lands in a file that gets committed and
 			// shared, where this machine's absolute path is worse than
 			// useless. Bare "harbormaster" is what every checkout can run.
 			if project != "" && !c.Flags().Changed("command") {
 				command = "harbormaster"
 			}
-			o := install.Options{ConfigDir: dir, Command: command, Skill: skills.Harbormaster, DryRun: dryRun, Now: a.Clock}
 			var r install.Report
-			if uninstall {
-				r, err = install.ClaudeUninstall(o)
-			} else {
-				r, err = install.Claude(o)
+			var err error
+			restart := ""
+			switch args[0] {
+			case "claude":
+				dir, derr := claudeConfigDir(project)
+				if derr != nil {
+					return exitf(ExitUsage, "%v", derr)
+				}
+				o := install.Options{ConfigDir: dir, Command: command, Skill: skills.Harbormaster, DryRun: dryRun, Now: a.Clock}
+				if uninstall {
+					r, err = install.ClaudeUninstall(o)
+				} else {
+					r, err = install.Claude(o)
+				}
+				restart = "Restart Claude Code sessions to pick up the hooks."
+			case "cursor":
+				dir, derr := cursorConfigDir(project)
+				if derr != nil {
+					return exitf(ExitUsage, "%v", derr)
+				}
+				o := install.CursorOptions{ConfigDir: dir, Command: command, DryRun: dryRun, Now: a.Clock}
+				if project != "" {
+					o.Rule = skills.CursorRule()
+				}
+				if uninstall {
+					r, err = install.CursorUninstall(o)
+				} else {
+					r, err = install.Cursor(o)
+				}
+				restart = "Restart Cursor to pick up the hooks."
+			case "agents-md":
+				dir := project
+				if dir == "" {
+					dir = a.Cwd
+				}
+				path := filepath.Join(dir, "AGENTS.md")
+				if uninstall {
+					r, err = install.AgentsMDUninstall(path, dryRun)
+				} else {
+					r, err = install.AgentsMD(path, dryRun)
+				}
+			default:
+				return exitf(ExitUsage, "unsupported agent %q (supported: %s)", args[0], supportedAgents)
 			}
 			if err != nil {
 				return exitf(ExitUsage, "%v", err)
@@ -79,15 +123,15 @@ func newInstall(a *app.App, uninstall bool) *cobra.Command {
 				_, _ = fmt.Fprintf(a.Stdout, "%s%s\n", verb, act)
 			}
 			if r.Backup != "" && !dryRun {
-				_, _ = fmt.Fprintf(a.Stdout, "settings.json reformatted; backup at %s\n", r.Backup)
+				_, _ = fmt.Fprintf(a.Stdout, "%s reformatted; backup at %s\n", filepath.Base(r.Settings), r.Backup)
 			}
-			if !uninstall && !dryRun {
-				_, _ = fmt.Fprintln(a.Stdout, "done. Restart Claude Code sessions to pick up the hooks.")
+			if !uninstall && !dryRun && restart != "" {
+				_, _ = fmt.Fprintln(a.Stdout, "done. "+restart)
 			}
 			return nil
 		},
 	}
-	cmd.Flags().StringVar(&project, "project", "", "install into <DIR>/.claude instead of the user-level config")
+	cmd.Flags().StringVar(&project, "project", "", "install into <DIR>/.claude, <DIR>/.cursor or <DIR>/AGENTS.md instead of the user-level location")
 	cmd.Flags().StringVar(&command, "command", defaultCommand(), "command hooks invoke (absolute path of this binary by default)")
 	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "list what would change without writing")
 	return cmd

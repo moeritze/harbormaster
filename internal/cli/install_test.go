@@ -96,3 +96,47 @@ func TestInstallReportsTheBackupItWrote(t *testing.T) {
 		t.Fatalf("backup is not the original file: %s", b)
 	}
 }
+
+func TestInstallCursorAndAgentsMDProject(t *testing.T) {
+	h := newHarness(t, "me", "/wt/a")
+	dir := t.TempDir()
+	if err := h.run("install", "cursor", "--project", dir, "--dry-run"); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(h.out.String(), "hooks.json") || !strings.Contains(h.out.String(), "harbormaster.mdc") {
+		t.Fatalf("%s", h.out.String())
+	}
+	if err := h.run("install", "cursor", "--project", dir); err != nil {
+		t.Fatal(err)
+	}
+	b, _ := os.ReadFile(filepath.Join(dir, ".cursor", "hooks.json")) //nolint:gosec // test-owned temp dir
+	if !strings.Contains(string(b), `"harbormaster hook cursor beforeShellExecution"`) || !strings.Contains(string(b), `"version": 1`) {
+		t.Fatalf("%s", b)
+	}
+	if _, err := os.Stat(filepath.Join(dir, ".cursor", "rules", "harbormaster.mdc")); err != nil {
+		t.Fatal("rule missing")
+	}
+	if err := h.run("uninstall", "cursor", "--project", dir); err != nil {
+		t.Fatal(err)
+	}
+	b, _ = os.ReadFile(filepath.Join(dir, ".cursor", "hooks.json")) //nolint:gosec // test-owned temp dir
+	if strings.Contains(string(b), "harbormaster") {
+		t.Fatalf("not removed: %s", b)
+	}
+	if err := h.run("install", "agents-md", "--project", dir); err != nil {
+		t.Fatal(err)
+	}
+	b, _ = os.ReadFile(filepath.Join(dir, "AGENTS.md")) //nolint:gosec // test-owned temp dir
+	if !strings.Contains(string(b), "harbormaster:start") {
+		t.Fatalf("%s", b)
+	}
+	if err := h.run("uninstall", "agents-md", "--project", dir); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "AGENTS.md")); !os.IsNotExist(err) {
+		t.Fatal("AGENTS.md that only held our block must be gone")
+	}
+	if c := exitCode(h.run("install", "codex")); c != 3 {
+		t.Fatalf("unsupported agent must exit 3, got %d", c)
+	}
+}
