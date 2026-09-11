@@ -135,6 +135,36 @@ func (s *Store) Update(fn func(f *File) error) error {
 	return s.commit(f, pruned)
 }
 
+// Remove drops the entry with the given id. ok is false when it was not present.
+func (s *Store) Remove(id string) (Entry, bool, error) {
+	unlock, err := lock(s.path(lockName), lockTimeout)
+	if err != nil {
+		return Entry{}, false, err
+	}
+	defer unlock()
+
+	f, pruned, err := s.readPruned()
+	if err != nil {
+		return Entry{}, false, err
+	}
+	var removed Entry
+	found := false
+	kept := f.Entries[:0]
+	for _, e := range f.Entries {
+		if e.ID == id {
+			removed = e
+			found = true
+			continue
+		}
+		kept = append(kept, e)
+	}
+	f.Entries = kept
+	if err := s.commit(f, pruned); err != nil {
+		return Entry{}, false, err
+	}
+	return removed, found, nil
+}
+
 // readPruned reads the document and prunes it in memory. It is side-effect
 // free: nothing is written to registry.json or history.jsonl. Must be
 // called with the lock held. The caller is responsible for calling commit
