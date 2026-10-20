@@ -42,6 +42,10 @@ When you run `harbormaster run` from an interactive terminal, the child's stdin
 is detached, so dev-server keyboard shortcuts are unavailable; agents (piped
 stdin) are unaffected.
 
+When the server exits, or `run` gets Ctrl-C, SIGTERM or SIGHUP (even while
+still registering), its whole process group is stopped: SIGTERM first, then
+SIGKILL after 10 s for any worker that ignores SIGTERM.
+
 ### How ownership works
 
 Each entry records the agent session that started it. `HARBORMASTER_SESSION`

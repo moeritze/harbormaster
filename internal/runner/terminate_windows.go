@@ -20,9 +20,9 @@ func sendTerm(pid int, _ bool) error {
 
 func sendKill(pid int, group bool) error { return sendTerm(pid, group) }
 
-func alive(pid int) bool {
+func gone(pid int, _ bool) bool {
 	_, err := os.FindProcess(pid)
-	return err == nil
+	return err != nil
 }
 
 // exitCode has no signal concept on windows; forward the process exit code.

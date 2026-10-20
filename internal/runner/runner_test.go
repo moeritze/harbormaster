@@ -348,3 +348,98 @@ func TestTerminateGroupFallsBackForNonLeader(t *testing.T) {
 		t.Fatal("still alive")
 	}
 }
+
+// ignoreTERMArgs starts a worker that ignores SIGTERM in sh's process group,
+// writes its pid to pidFile and lets sh exit at once.
+func ignoreTERMArgs(pidFile string) []string {
+	return []string{"sh", "-c", fmt.Sprintf("(trap '' TERM; exec sleep 30) </dev/null >/dev/null 2>&1 & echo $! > '%s'; exit 0", pidFile)}
+}
+
+// readWorkerPid reads the worker pid and SIGKILLs it at cleanup, so a failed
+// assertion never leaks the test's own sleep.
+func readWorkerPid(t *testing.T, pidFile string) int {
+	t.Helper()
+	b, err := os.ReadFile(pidFile) //nolint:gosec // test-owned tmp path, not user input
+	if err != nil {
+		t.Fatal(err)
+	}
+	pid, err := strconv.Atoi(strings.TrimSpace(string(b)))
+	if err != nil {
+		t.Fatalf("parse worker pid from %q: %v", b, err)
+	}
+	t.Cleanup(func() { _ = syscall.Kill(pid, syscall.SIGKILL) })
+	return pid
+}
+
+func waitDead(t *testing.T, pid int, within time.Duration) {
+	t.Helper()
+	deadline := time.Now().Add(within)
+	for time.Now().Before(deadline) && (liveness.OS{}).PidAlive(pid) {
+		time.Sleep(50 * time.Millisecond)
+	}
+	if (liveness.OS{}).PidAlive(pid) {
+		t.Fatalf("pid %d still alive after %s", pid, within)
+	}
+}
+
+// TestRunTerminatesGroupMemberThatIgnoresTERM: the leader exiting must not
+// end the group sweep while a TERM-ignoring worker still holds the group.
+func TestRunTerminatesGroupMemberThatIgnoresTERM(t *testing.T) {
+	a, _ := newApp(t)
+	pidFile := filepath.Join(t.TempDir(), "worker.pid")
+	// ListenTimeout outlasts the run so the not-listening warning never races
+	// the child's output copier on the shared test buffer.
+	opts := runner.Options{Port: freePort(t), Args: ignoreTERMArgs(pidFile), ListenTimeout: time.Minute, KillTimeout: time.Second}
+	if _, err := runner.Run(context.Background(), a, opts, register(a)); err != nil {
+		t.Fatal(err)
+	}
+	waitDead(t, readWorkerPid(t, pidFile), 3*time.Second)
+}
+
+func TestTerminateGroupKillsTERMIgnoringWorker(t *testing.T) {
+	pidFile := filepath.Join(t.TempDir(), "worker.pid")
+	args := ignoreTERMArgs(pidFile)
+	cmd := exec.Command(args[0], args[1:]...) //nolint:gosec // fixed test command
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	_ = cmd.Wait() // leader reaped: only the worker is left in the group
+	worker := readWorkerPid(t, pidFile)
+	if err := runner.Terminate(cmd.Process.Pid, true, 500*time.Millisecond); err != nil {
+		t.Fatal(err)
+	}
+	waitDead(t, worker, 2*time.Second)
+}
+
+// TestRunSignalDuringRegisterStopsChild: a SIGHUP while register is still
+// running (e.g. waiting for the registry lock) must stop the child, not kill
+// harbormaster and orphan it.
+func TestRunSignalDuringRegisterStopsChild(t *testing.T) {
+	a, _ := newApp(t)
+	pids := make(chan int, 1)
+	release := make(chan struct{})
+	blocking := func(_, pid int, _, _ string) (registry.Entry, error) {
+		pids <- pid
+		<-release
+		return registry.Entry{PID: pid}, errors.New("lock timeout")
+	}
+	opts := runner.Options{Port: freePort(t), Args: []string{"sleep", "30"}, ListenTimeout: time.Second, KillTimeout: 2 * time.Second}
+	done := make(chan struct{})
+	go func() {
+		_, _ = runner.Run(context.Background(), a, opts, blocking)
+		close(done)
+	}()
+	child := <-pids
+	if err := syscall.Kill(os.Getpid(), syscall.SIGHUP); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(100 * time.Millisecond) // let the signal be delivered while register blocks
+	close(release)
+	select {
+	case <-done:
+	case <-time.After(3 * time.Second):
+		t.Fatal("run did not return")
+	}
+	waitDead(t, child, time.Second)
+}
