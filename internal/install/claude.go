@@ -77,12 +77,18 @@ func (o Options) command(event string) string {
 	return c + " hook claude " + event
 }
 
+// isOurCommand reports whether one item of an entry's "hooks" array is a
+// command harbormaster installed.
+func isOurCommand(h any) bool {
+	m, _ := h.(map[string]any)
+	cmd, _ := m["command"].(string)
+	return ourCommand.MatchString(strings.TrimSpace(cmd))
+}
+
 func isOurs(entry map[string]any) bool {
 	hs, _ := entry["hooks"].([]any)
 	for _, h := range hs {
-		m, _ := h.(map[string]any)
-		cmd, _ := m["command"].(string)
-		if ourCommand.MatchString(strings.TrimSpace(cmd)) {
+		if isOurCommand(h) {
 			return true
 		}
 	}
@@ -268,12 +274,25 @@ func ClaudeUninstall(o Options) (Report, error) {
 		}
 		var kept []any
 		for _, e := range list {
-			if m, ok := e.(map[string]any); ok && isOurs(m) {
-				r.Removed = append(r.Removed, ev)
-				changed = true
+			m, ok := e.(map[string]any)
+			if !ok || !isOurs(m) {
+				kept = append(kept, e)
 				continue
 			}
-			kept = append(kept, e)
+			r.Removed = append(r.Removed, ev)
+			changed = true
+			// A user may have added their own command to our entry: keep
+			// the entry with whatever is not ours.
+			var rest []any
+			for _, h := range m["hooks"].([]any) {
+				if !isOurCommand(h) {
+					rest = append(rest, h)
+				}
+			}
+			if len(rest) > 0 {
+				m["hooks"] = rest
+				kept = append(kept, m)
+			}
 		}
 		if len(kept) == 0 {
 			delete(hooks, ev)
