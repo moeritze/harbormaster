@@ -20,9 +20,9 @@ const (
 	lockName      = "registry.lock"
 	historyName   = "history.jsonl"
 	lockTimeout   = 5 * time.Second
-	// readLockTimeout bounds how long a read-only path (Peek, History)
-	// waits for the lock. A stalled writer should make `ls` or a hook fail
-	// fast, not hang for the full write timeout.
+	// readLockTimeout bounds how long History waits for the lock. A
+	// stalled writer should make it fail fast, not hang for the full write
+	// timeout.
 	readLockTimeout = time.Second
 )
 
@@ -72,12 +72,6 @@ type Store struct {
 	// means os.Stderr.
 	Warn   io.Writer
 	warned bool
-	// StartTimeOf reports when a pid started, so pruning can backfill an
-	// entry that has no recorded start time (written by an older build, or
-	// by a registration whose lookup failed). "" means "cannot tell", which
-	// leaves the entry as it is. Defaults to the platform lookup; tests
-	// replace it.
-	StartTimeOf func(pid int) string
 	// ProbeBudget bounds the wall time one prune may spend dialing ports.
 	// Zero means defaultProbeBudget.
 	ProbeBudget time.Duration
@@ -104,7 +98,7 @@ func Open(dir string, p Prober, now func() time.Time) (*Store, error) {
 	if now == nil {
 		now = func() time.Time { return time.Now().UTC() }
 	}
-	return &Store{dir: dir, prober: p, now: now, StartTimeOf: defaultStartTimeOf}, nil
+	return &Store{dir: dir, prober: p, now: now}, nil
 }
 
 // validateStateDir refuses a state directory harbormaster cannot trust: a
@@ -148,15 +142,7 @@ func (s *Store) Dir() string { return s.dir }
 
 func (s *Store) path(name string) string { return filepath.Join(s.dir, name) }
 
-// Load reads, prunes, and (if anything was pruned or repaired) writes back.
-//
-// A start time backfilled by this call is persisted but NOT reflected in the
-// document returned: reading a pid's start time now says nothing about
-// whether that pid was already reused before the read, so it does not turn
-// an unverifiable entry into a verified one for the very command that
-// repaired it. The repair counts from the next read on, which is what makes
-// `harbormaster ls` a deliberate step a user takes -- and sees the entry
-// during -- before harbormaster will signal that entry's process group.
+// Load reads, prunes, and (if anything was pruned) writes back.
 func (s *Store) Load() (*File, error) {
 	unlock, err := lock(s.path(lockName), lockTimeout)
 	if err != nil {
@@ -164,38 +150,30 @@ func (s *Store) Load() (*File, error) {
 	}
 	defer unlock()
 
-	f, pruned, filled, err := s.readPruned()
+	f, pruned, err := s.readPruned()
 	if err != nil {
 		return nil, err
 	}
-	if len(pruned) > 0 || len(filled) > 0 {
+	if len(pruned) > 0 {
 		if err := s.commit(f, pruned); err != nil {
 			return nil, err
 		}
 	}
-	cp := *f
-	cp.Entries = append([]Entry(nil), f.Entries...)
-	for _, i := range filled {
-		cp.Entries[i].StartTime = ""
-	}
-	return &cp, nil
+	return f, nil
 }
 
 // Peek returns the registry as stored, without pruning or probing. Hooks
-// use it because they must answer in milliseconds; entries may be stale.
+// use it because they must answer in milliseconds; entries may be stale. It
+// takes no lock: every writer replaces registry.json by rename, so an
+// unlocked read sees one whole version of the file. A damaged file is
+// reported, not quarantined, since moving it needs the lock.
 func (s *Store) Peek() (*File, error) {
-	unlock, err := lock(s.path(lockName), readLockTimeout)
-	if err != nil {
-		return nil, err
+	f, err := s.readFile()
+	var pe *parseError
+	if errors.As(err, &pe) {
+		return nil, pe.err
 	}
-	defer unlock()
-	f, err := s.read()
-	if err != nil {
-		return nil, err
-	}
-	cp := *f
-	cp.Entries = append([]Entry(nil), f.Entries...)
-	return &cp, nil
+	return f, err
 }
 
 // Prune removes dead entries now and returns what was pruned.
@@ -206,11 +184,11 @@ func (s *Store) Prune() ([]HistoryRecord, error) {
 	}
 	defer unlock()
 
-	f, pruned, filled, err := s.readPruned()
+	f, pruned, err := s.readPruned()
 	if err != nil {
 		return nil, err
 	}
-	if len(pruned) > 0 || len(filled) > 0 {
+	if len(pruned) > 0 {
 		if err := s.commit(f, pruned); err != nil {
 			return nil, err
 		}
@@ -226,7 +204,7 @@ func (s *Store) Update(fn func(f *File) error) error {
 	}
 	defer unlock()
 
-	f, pruned, _, err := s.readPruned()
+	f, pruned, err := s.readPruned()
 	if err != nil {
 		return err
 	}
@@ -265,7 +243,7 @@ func (s *Store) Remove(id string) (Entry, bool, error) {
 		kept = append(kept, e)
 	}
 	f.Entries = kept
-	pruned, _ := s.prune(f)
+	pruned := s.prune(f)
 	if err := s.commit(f, pruned); err != nil {
 		return Entry{}, false, err
 	}
@@ -275,20 +253,17 @@ func (s *Store) Remove(id string) (Entry, bool, error) {
 // readPruned reads the document and prunes it in memory. It is side-effect
 // free: nothing is written to registry.json or history.jsonl. Must be
 // called with the lock held. The caller is responsible for calling commit
-// to persist both the pruned document and the pruned records. filled lists
-// the surviving entries whose start time was backfilled in memory: the
-// document must be written back for them even when nothing was pruned.
-func (s *Store) readPruned() (*File, []HistoryRecord, []int, error) {
+// to persist both the pruned document and the pruned records.
+func (s *Store) readPruned() (*File, []HistoryRecord, error) {
 	f, err := s.read()
 	if err != nil {
-		return nil, nil, nil, err
+		return nil, nil, err
 	}
-	pruned, filled := s.prune(f)
-	return f, pruned, filled, nil
+	return f, s.prune(f), nil
 }
 
-// commit persists f and then, only once that succeeds, appends each pruned
-// record to history. The registry write must happen first: if the history
+// commit persists f and then, only once that succeeds, appends the pruned
+// records to history in one write. The registry write must happen first: if the history
 // append then fails, a retry re-reads a registry that already reflects the
 // pruned entries, so it finds nothing left to prune and cannot duplicate
 // history records. Must be called with the lock held.
@@ -296,15 +271,31 @@ func (s *Store) commit(f *File, pruned []HistoryRecord) error {
 	if err := s.write(f); err != nil {
 		return err
 	}
-	for _, rec := range pruned {
-		if err := s.appendHistoryLocked(rec); err != nil {
-			return err
-		}
+	if len(pruned) == 0 {
+		return nil
 	}
-	return nil
+	return s.appendHistoryLocked(pruned...)
 }
 
+// parseError marks a registry.json that is damaged rather than merely
+// unreadable: not JSON, or JSON without a schema version ({}, null).
+type parseError struct{ err error }
+
+func (e *parseError) Error() string { return e.err.Error() }
+
+// read is readFile under the lock: a damaged file is quarantined and work
+// continues from an empty document.
 func (s *Store) read() (*File, error) {
+	f, err := s.readFile()
+	var pe *parseError
+	if errors.As(err, &pe) {
+		return s.quarantine(pe.err)
+	}
+	return f, err
+}
+
+// readFile reads registry.json without the lock and without side effects.
+func (s *Store) readFile() (*File, error) {
 	if err := checkNotSymlink(s.path(fileName)); err != nil {
 		return nil, err
 	}
@@ -317,7 +308,11 @@ func (s *Store) read() (*File, error) {
 	}
 	var f File
 	if err := json.Unmarshal(b, &f); err != nil {
-		return s.quarantine(fmt.Errorf("parse registry: %w", err))
+		return nil, &parseError{fmt.Errorf("parse registry: %w", err)}
+	}
+	if f.Version == 0 {
+		// No version means no build wrote it as its live state.
+		return nil, &parseError{errors.New("parse registry: no schema version")}
 	}
 	if f.Version != SchemaVersion {
 		// NOT quarantined. A version this build does not know is a file
@@ -333,10 +328,11 @@ func (s *Store) read() (*File, error) {
 	return &f, nil
 }
 
-// quarantine moves a registry.json that is not valid JSON out of the way and
+// quarantine moves a registry.json that is not valid JSON (or has no schema
+// version) out of the way and
 // continues from an empty document. Before this, one damaged file (a crashed
 // writer, a stray edit) made every command exit 4 with no way back short of
-// deleting the file by hand. Only a PARSE failure gets here: an unsupported
+// deleting the file by hand. Only a parseError gets here: an unsupported
 // schema version is a readable file this build simply does not own, and
 // read() fails closed on it instead.
 //
@@ -438,11 +434,7 @@ func (s *Store) atomicWrite(name, pattern string, data []byte) error {
 	return nil
 }
 
-// prune removes dead entries (see prune.go). It returns the pruned records
-// and the indices of surviving entries it repaired in place.
-func (s *Store) prune(f *File) ([]HistoryRecord, []int) {
-	return pruneEntries(f, s.prober, s.now(), pruneOptions{
-		startTimeOf: s.StartTimeOf,
-		budget:      s.ProbeBudget,
-	})
+// prune removes dead entries (see prune.go) and returns the pruned records.
+func (s *Store) prune(f *File) []HistoryRecord {
+	return pruneEntries(f, s.prober, s.now(), s.ProbeBudget)
 }

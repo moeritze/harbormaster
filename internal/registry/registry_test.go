@@ -573,3 +573,43 @@ func TestPeekDoesNotPrune(t *testing.T) {
 		t.Fatal("load should prune")
 	}
 }
+
+// TestPeekDoesNotQuarantine: Peek holds no lock, so it must never move a
+// damaged file; it reports the error and leaves the repair to a locked read.
+func TestPeekDoesNotQuarantine(t *testing.T) {
+	s := open(t)
+	if err := os.WriteFile(filepath.Join(s.Dir(), "registry.json"), []byte("not json"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Peek(); err == nil {
+		t.Fatal("Peek of a damaged file must fail")
+	}
+	if _, err := os.Stat(filepath.Join(s.Dir(), "registry.json")); err != nil {
+		t.Fatalf("registry.json must be left in place: %v", err)
+	}
+	if matches, _ := filepath.Glob(filepath.Join(s.Dir(), "registry.json.corrupt-*")); len(matches) != 0 {
+		t.Fatalf("Peek must not quarantine, found %v", matches)
+	}
+}
+
+// TestLoadQuarantinesVersionZero pins #18: a file that parses but carries no
+// version cannot be any build's live state, so it is quarantined like
+// unparsable JSON instead of bricking every command.
+func TestLoadQuarantinesVersionZero(t *testing.T) {
+	for _, content := range []string{`{}`, `null`, `{"entries":[]}`} {
+		t.Run(content, func(t *testing.T) {
+			s := open(t)
+			s.Warn = &bytes.Buffer{}
+			if err := os.WriteFile(filepath.Join(s.Dir(), "registry.json"), []byte(content), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			f, err := s.Load()
+			if err != nil || len(f.Entries) != 0 {
+				t.Fatalf("expected an empty registry after quarantine, got %+v %v", f, err)
+			}
+			if matches, _ := filepath.Glob(filepath.Join(s.Dir(), "registry.json.corrupt-*")); len(matches) != 1 {
+				t.Fatalf("expected one quarantined copy, got %v", matches)
+			}
+		})
+	}
+}

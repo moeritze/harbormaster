@@ -29,16 +29,20 @@ func (s *Store) AppendHistory(rec HistoryRecord) error {
 	return s.appendHistoryLocked(rec)
 }
 
-func (s *Store) appendHistoryLocked(rec HistoryRecord) error {
+// appendHistoryLocked appends recs with one read and one rewrite of the
+// file, however many there are.
+func (s *Store) appendHistoryLocked(recs ...HistoryRecord) error {
 	lines, _, err := s.readHistoryLines()
 	if err != nil {
 		return err
 	}
-	b, err := json.Marshal(rec)
-	if err != nil {
-		return err
+	for _, rec := range recs {
+		b, err := json.Marshal(rec)
+		if err != nil {
+			return err
+		}
+		lines = append(lines, string(b))
 	}
-	lines = append(lines, string(b))
 	if len(lines) > historyCap {
 		lines = lines[len(lines)-historyCap:]
 	}

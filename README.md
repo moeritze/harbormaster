@@ -56,7 +56,10 @@ registration: harbormaster never signals a pid it has no entry for, so `claim`
 a server it did not start before killing it. Even `--force` never touches
 pid 1, your own pid, or another user's process. Each entry also records when
 its process started, so a pid that has been recycled since it was registered
-is refused instead of signalled.
+is refused instead of signalled. An entry without a recorded start time (an
+older build, a failed lookup) is never signalled as a process group, and
+nothing, not even `ls`, fills one in later: stop that process yourself or
+drop the entry with `release`.
 
 The only way to end up with no session id at all is setting `HARBORMASTER_AGENT`
 without `HARBORMASTER_SESSION` -- every other path always yields a non-empty
@@ -93,7 +96,9 @@ target. harbormaster creates the directory with mode 0700 and never re-chmods
 an existing one. A directory group or other can write is refused with the
 `chmod` that fixes it; a symlinked directory, or one owned by another user, is
 refused outright -- move the state dir or set `HARBORMASTER_HOME` to one you
-own.
+own. A `registry.json` that is not valid JSON, or has no `version` (`{}`,
+`null`), is moved aside to `registry.json.corrupt-<ns>` by the next command
+and work continues from an empty registry.
 
 ## Claude Code integration
 

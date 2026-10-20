@@ -68,3 +68,56 @@ func TestReadHistoryLinesSkipsOverlongLines(t *testing.T) {
 		t.Fatalf("History after append = %+v", recs)
 	}
 }
+
+// TestCommitAppendsAllRecords pins the batched history append (#4): one
+// commit with more pruned records than the cap keeps the newest historyCap
+// of them, in order.
+func TestCommitAppendsAllRecords(t *testing.T) {
+	s, err := Open(filepath.Join(t.TempDir(), "hm"), alwaysAliveInternal{}, fixedNowInternal)
+	if err != nil {
+		t.Fatal(err)
+	}
+	recs := make([]HistoryRecord, historyCap+1)
+	for i := range recs {
+		recs[i] = HistoryRecord{Entry: Entry{Port: i}, Reason: "pid_dead", At: fixedNowInternal()}
+	}
+	if err := s.commit(&File{Version: SchemaVersion, Entries: []Entry{}}, recs); err != nil {
+		t.Fatal(err)
+	}
+	got, err := s.History(0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != historyCap || got[0].Port != 1 || got[historyCap-1].Port != historyCap {
+		t.Fatalf("got %d records, first %d last %d", len(got), got[0].Port, got[len(got)-1].Port)
+	}
+}
+
+// TestPeekDoesNotWaitForLock pins #5: hooks read through Peek, and a writer
+// holding the lock must not make them wait (and then fail open).
+func TestPeekDoesNotWaitForLock(t *testing.T) {
+	s, err := Open(filepath.Join(t.TempDir(), "hm"), alwaysAliveInternal{}, fixedNowInternal)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Update(func(f *File) error {
+		f.Entries = append(f.Entries, Entry{ID: "a", Port: 3000, PID: 1, StartedAt: fixedNowInternal()})
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	unlock, err := lock(s.path(lockName), lockTimeout)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer unlock()
+
+	start := time.Now()
+	f, err := s.Peek()
+	if d := time.Since(start); d > 100*time.Millisecond {
+		t.Fatalf("Peek waited %s for the lock", d)
+	}
+	if err != nil || len(f.Entries) != 1 {
+		t.Fatalf("got %+v %v", f, err)
+	}
+}

@@ -69,23 +69,27 @@ supervisor, and signal handling in `kill`/`release`.
   days later), not a process deliberately arranged to start in the same
   second as the original. An entry that has no recorded start time cannot be
   checked at all: it may still be signalled on its own pid, but never as a
-  process group. `harbormaster ls` records the missing value, and the entry
-  can be group-signalled from the next command on.
-- A `registry.json` that is not valid JSON is moved aside to
+  process group. Nothing records the missing value later: a start time read
+  after registration cannot prove the pid was not reused in between. Stop
+  such a process yourself, or drop its entry with `harbormaster release`.
+- A `registry.json` that is not valid JSON, or that parses but has no
+  `version` (`{}`, `null`), is moved aside to
   `registry.json.corrupt-<nanoseconds>` (a fresh name created with `O_EXCL`,
   next to the registry) and work continues from an empty registry. The move
   is reported three ways: a warning on stderr, a `quarantined` record in
   `history.jsonl` naming the copy, and a line in `hook-errors.log` when a
-  hook is what found it. A registry whose `version` this build does not know
+  hook installed a writer for it. Hooks read without the lock, so they never
+  move the file: they log the parse error, allow the command, and leave the
+  quarantine to the next CLI command. A registry whose `version` this build does not know
   is *not* quarantined -- it is readable state belonging to some other build,
   most likely a newer harbormaster -- so every command fails closed and
   leaves the file alone. Any process running as you can write junk into
   `registry.json` and trigger a quarantine; what that destroys is
   bookkeeping, and the servers themselves keep running.
-- Read-only paths -- `history`, and every hook decision -- wait at most 1 s
-  for the registry lock, against 5 s for writes, and a hook that cannot take
-  it in time allows the command it was asked about. A stalled writer must
-  never freeze an agent's session.
+- Hook decisions read `registry.json` without the lock: writers replace it
+  by rename, so a read sees one whole version. `history` waits at most 1 s
+  for the lock, against 5 s for writes. A stalled writer must never freeze
+  an agent's session.
 
 ## What harbormaster does not guarantee
 
