@@ -36,7 +36,7 @@ func sessionContext(s *scope, entries []registry.Entry) string {
 			fmt.Fprintf(&b, "… and %d more (run harbormaster ls)\n", extra)
 		}
 	}
-	fmt.Fprintf(&b, "this worktree's port: %s\n", myPort(s))
+	fmt.Fprintf(&b, "this worktree's port: %s\n", myPort(s, entries))
 	b.WriteString(usageRule)
 	return b.String()
 }
@@ -51,8 +51,8 @@ func blindKillContext(others []registry.Entry, now time.Time) string {
 	return b.String()
 }
 
-func wrapNudge(s *scope) string {
-	return fmt.Sprintf("harbormaster: this looks like a dev server start. Wrap it so other sessions can see it and nobody kills it by accident: `harbormaster run --label \"<task>\" -- <command>` (this worktree's port: %s).", myPort(s))
+func wrapNudge(s *scope, entries []registry.Entry) string {
+	return fmt.Sprintf("harbormaster: this looks like a dev server start. Wrap it so other sessions can see it and nobody kills it by accident: `harbormaster run --label \"<task>\" -- <command>` (this worktree's port: %s).", myPort(s, entries))
 }
 
 func postStartNudge() string {

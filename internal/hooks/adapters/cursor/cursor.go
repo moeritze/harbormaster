@@ -4,14 +4,16 @@
 // common fields (conversation_id, generation_id, hook_event_name,
 // workspace_roots, …); beforeShellExecution adds command/cwd/sandbox and
 // answers with {permission: allow|deny|ask, user_message, agent_message};
-// sessionStart answers with {env, additional_context}; afterShellExecution
+// sessionStart answers with {env, additional_context} (harbormaster sets
+// only the latter); afterShellExecution
 // and sessionEnd use no output fields. Exit 0 means "use the JSON"; any
 // other exit code fails open.
 //
 // Two facts shape everything below. sessionStart's `env` is handed to
 // *subsequent hook executions* only — it never reaches the shell the agent
 // runs commands in, so it cannot make the agent's own `harbormaster run`
-// calls carry the conversation id (see FormatSession). And sessionEnd fires
+// calls carry the conversation id (see FormatSession), and harbormaster
+// does not set it. And sessionEnd fires
 // once per conversation, with reason ∈ completed | aborted | error |
 // window_close | user_close; the per-turn event is `stop`, which
 // harbormaster does not hook.
@@ -23,9 +25,6 @@ import (
 
 	"github.com/moeritze/harbormaster/internal/hooks"
 )
-
-// Events lists the Cursor hook events harbormaster handles.
-var Events = []string{"sessionStart", "beforeShellExecution", "afterShellExecution", "sessionEnd"}
 
 type payload struct {
 	ConversationID string   `json:"conversation_id"`
@@ -76,8 +75,7 @@ type shellOutput struct {
 }
 
 type sessionOutput struct {
-	Env               map[string]string `json:"env,omitempty"`
-	AdditionalContext string            `json:"additional_context,omitempty"`
+	AdditionalContext string `json:"additional_context,omitempty"`
 }
 
 // Format renders the stdout Cursor expects for shell events. nil means
@@ -111,24 +109,22 @@ func Format(event string, r hooks.Result) []byte {
 	return b
 }
 
-// FormatSession renders sessionStart's stdout: the registry context plus an
-// env block. nil means print nothing.
+// FormatSession renders sessionStart's stdout: the registry context. nil
+// means print nothing.
 //
-// The env block does NOT reach the agent's shell — Cursor hands it to later
-// hook executions only — so it cannot make the agent's own `harbormaster
-// run` calls carry the conversation id. It is still worth setting, because
-// the hook processes that read it are the ones deciding ownership. What
-// closes the gap for the agent is the extra context line below, which shows
-// the one command that does attribute a server to this conversation; failing
-// that, harbormaster falls back to treating servers started from a plain
-// shell in the same worktree as this conversation's (see scope.owns).
+// It sets no `env`: Cursor hands that to later hook executions only, never
+// the agent's shell, and hooks take identity from the payload anyway. What
+// lets the agent's own `harbormaster run` calls carry the conversation id
+// is the extra context line below, which shows the one command that does
+// attribute a server to this conversation; failing that, harbormaster falls
+// back to treating servers started from a plain shell in the same worktree
+// as this conversation's (see scope.owns).
 func FormatSession(event, session string, r hooks.Result) []byte {
 	if event != "sessionStart" {
 		return nil
 	}
 	o := sessionOutput{AdditionalContext: r.Context}
 	if session != "" {
-		o.Env = map[string]string{"HARBORMASTER_AGENT": "cursor", "HARBORMASTER_SESSION": session}
 		line := "To attribute servers to this conversation, start them with: HARBORMASTER_SESSION=" + session + ` harbormaster run --label "<task>" -- <command>`
 		if o.AdditionalContext == "" {
 			o.AdditionalContext = line
@@ -136,7 +132,7 @@ func FormatSession(event, session string, r hooks.Result) []byte {
 			o.AdditionalContext += "\n" + line
 		}
 	}
-	if o.Env == nil && o.AdditionalContext == "" {
+	if o.AdditionalContext == "" {
 		return nil
 	}
 	b, err := json.Marshal(o)

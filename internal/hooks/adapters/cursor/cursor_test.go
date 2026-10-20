@@ -87,9 +87,8 @@ func TestFormatShapes(t *testing.T) {
 	if !strings.Contains(ctx, `HARBORMASTER_SESSION=c1 harbormaster run --label "<task>" -- <command>`) {
 		t.Fatalf("missing the attribution line: %q", ctx)
 	}
-	env := m["env"].(map[string]any)
-	if env["HARBORMASTER_AGENT"] != "cursor" || env["HARBORMASTER_SESSION"] != "c1" {
-		t.Fatalf("%v", env)
+	if _, ok := m["env"]; ok {
+		t.Fatalf("env reaches no shell and must not be set: %v", m)
 	}
 	if got := cursor.FormatSession("sessionStart", "", hooks.Result{Decision: hooks.Allow}); got != nil {
 		t.Fatalf("no session and no context must print nothing, got %s", got)

@@ -241,10 +241,18 @@ func (c *Core) preShell(s *scope, cmd string) (Result, error) {
 	if err != nil {
 		return Result{}, err
 	}
+	// A dead entry protects nothing: it must not block a restart after a
+	// crash, nor a kill of a pid that no longer runs.
+	var live []registry.Entry
+	for _, e := range f.Entries {
+		if s.app.Prober.PidAlive(e.PID) {
+			live = append(live, e)
+		}
+	}
 	foreign := func(e registry.Entry) bool { return !s.owns(e) }
 	switch d.Class {
 	case detect.Kill:
-		for _, e := range f.Entries {
+		for _, e := range live {
 			for _, p := range d.Ports {
 				if e.Port == p && foreign(e) {
 					return Result{Decision: Deny, Reason: denyKill(e, s.app.Clock())}, nil
@@ -260,16 +268,16 @@ func (c *Core) preShell(s *scope, cmd string) (Result, error) {
 			// A kill with no port and no pid in its text ("pkill -f node")
 			// may or may not hit somebody else's server: harbormaster
 			// cannot tell, so it asks the human instead of deciding.
-			if others := foreignEntries(s, f.Entries); len(others) > 0 {
+			if others := foreignEntries(s, live); len(others) > 0 {
 				return Result{Decision: Ask, Reason: blindKillContext(others, s.app.Clock())}, nil
 			}
 		}
 		return Result{Decision: Allow}, nil
 	case detect.ServerStart:
-		for _, e := range f.Entries {
+		for _, e := range live {
 			for _, p := range d.Ports {
 				if e.Port == p && foreign(e) {
-					return Result{Decision: Deny, Reason: denyPort(e, s)}, nil
+					return Result{Decision: Deny, Reason: denyPort(e, s, live)}, nil
 				}
 			}
 		}
@@ -277,9 +285,9 @@ func (c *Core) preShell(s *scope, cmd string) (Result, error) {
 			return Result{Decision: Allow}, nil
 		}
 		if c.Strict {
-			return Result{Decision: Deny, Reason: strictReason(s)}, nil
+			return Result{Decision: Deny, Reason: strictReason(s, live)}, nil
 		}
-		return Result{Decision: Allow, Context: wrapNudge(s)}, nil
+		return Result{Decision: Allow, Context: wrapNudge(s, live)}, nil
 	}
 	return Result{Decision: Allow}, nil
 }
@@ -319,8 +327,12 @@ func (c *Core) sessionEnd(s *scope, reason string) (Result, error) {
 	case "clear", "resume":
 		return Result{Decision: Allow}, nil
 	}
+	// Claude Code gives SessionEnd 3 s: bound the lock wait and the prune so
+	// the update fails (and is logged) inside that budget instead of being killed.
+	st := *a.Store
+	st.LockTimeout, st.ProbeBudget = time.Second, 300*time.Millisecond
 	var removed []registry.Entry
-	if err := a.Store.Update(func(f *registry.File) error {
+	if err := st.Update(func(f *registry.File) error {
 		kept := make([]registry.Entry, 0, len(f.Entries))
 		for _, e := range f.Entries {
 			if e.Session == a.Ident.Session {
@@ -376,19 +388,20 @@ func denyKill(e registry.Entry, now time.Time) string {
 	return fmt.Sprintf("harbormaster: port %d / pid %d belongs to %s. Do not kill it. Use `harbormaster ls` to see what runs, and `harbormaster kill <port>` only for ports this session owns.", e.Port, e.PID, render.OwnerLine(e, now))
 }
 
-func denyPort(e registry.Entry, s *scope) string {
-	return fmt.Sprintf("harbormaster: port %d is in use by %s. Start this server on this worktree's port instead: `harbormaster run --label \"<task>\" -- <command>` (port %s).", e.Port, render.OwnerLine(e, s.app.Clock()), myPort(s))
+func denyPort(e registry.Entry, s *scope, entries []registry.Entry) string {
+	return fmt.Sprintf("harbormaster: port %d is in use by %s. Start this server on this worktree's port instead: `harbormaster run --label \"<task>\" -- <command>` (port %s).", e.Port, render.OwnerLine(e, s.app.Clock()), myPort(s, entries))
 }
 
-func strictReason(s *scope) string {
-	return fmt.Sprintf("harbormaster: dev servers must be started through the wrapper so other sessions can see them: `harbormaster run --label \"<task>\" -- <command>` (this worktree's port: %s).", myPort(s))
+func strictReason(s *scope, entries []registry.Entry) string {
+	return fmt.Sprintf("harbormaster: dev servers must be started through the wrapper so other sessions can see them: `harbormaster run --label \"<task>\" -- <command>` (this worktree's port: %s).", myPort(s, entries))
 }
 
 // myPort needs the worktree, so this is one of the three callers that pays
-// for git discovery.
-func myPort(s *scope) string {
+// for git discovery. It resolves against the entries the hook already read:
+// no lock, no prune, no port probes.
+func myPort(s *scope, entries []registry.Entry) string {
 	s.git()
-	p, err := s.app.MyPort()
+	p, err := s.app.PortAmong(entries, func(int) bool { return false })
 	if err != nil {
 		return "unknown"
 	}

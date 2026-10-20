@@ -75,6 +75,9 @@ type Store struct {
 	// ProbeBudget bounds the wall time one prune may spend dialing ports.
 	// Zero means defaultProbeBudget.
 	ProbeBudget time.Duration
+	// LockTimeout bounds how long Update waits for the lock. Zero means
+	// lockTimeout.
+	LockTimeout time.Duration
 }
 
 // Open creates dir with mode 0700 if it does not exist yet, validates it,
@@ -198,7 +201,11 @@ func (s *Store) Prune() ([]HistoryRecord, error) {
 
 // Update runs fn on the pruned document under the lock and writes the result atomically.
 func (s *Store) Update(fn func(f *File) error) error {
-	unlock, err := lock(s.path(lockName), lockTimeout)
+	wait := s.LockTimeout
+	if wait == 0 {
+		wait = lockTimeout
+	}
+	unlock, err := lock(s.path(lockName), wait)
 	if err != nil {
 		return err
 	}

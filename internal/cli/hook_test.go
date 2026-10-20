@@ -131,7 +131,7 @@ func TestHookCursorDeniesForeignKillAndSessionStartExportsEnv(t *testing.T) {
 		t.Fatal(err)
 	}
 	out = h.out.String()
-	if !strings.Contains(out, `"HARBORMASTER_SESSION":"me"`) || !strings.Contains(out, `"additional_context"`) {
+	if !strings.Contains(out, `HARBORMASTER_SESSION=me harbormaster run`) || !strings.Contains(out, `"additional_context"`) {
 		t.Fatalf("%s", out)
 	}
 	h.stdin = strings.NewReader(`{"conversation_id":"me","command":"npm run dev","cwd":"/wt/a"}`)

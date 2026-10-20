@@ -132,13 +132,19 @@ func (a *App) MyPort() (int, error) {
 	if err != nil {
 		return 0, fmt.Errorf("registry: %w", err)
 	}
+	return a.PortAmong(f.Entries, a.Prober.PortListening)
+}
+
+// PortAmong resolves this worktree's port against the given entries, asking
+// listening about ports no entry claims. It reads no registry itself.
+func (a *App) PortAmong(entries []registry.Entry, listening func(int) bool) (int, error) {
 	taken := func(p int) bool {
-		for _, e := range f.Entries {
+		for _, e := range entries {
 			if e.Port == p {
 				return !ident.Owns(a.Ident, e, a.Git.Worktree)
 			}
 		}
-		return a.Prober.PortListening(p)
+		return listening(p)
 	}
 	return ports.Resolve(a.WorktreeKey(), a.Ports, taken)
 }
