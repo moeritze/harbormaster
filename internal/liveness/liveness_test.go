@@ -4,6 +4,7 @@ import (
 	"net"
 	"os"
 	"os/exec"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -86,6 +87,9 @@ func TestPidOnPortFindsListener(t *testing.T) {
 }
 
 func TestPidStartTimeSelf(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("PidStartTime is not implemented on windows by design")
+	}
 	st, err := liveness.PidStartTime(os.Getpid())
 	if err != nil {
 		t.Skip("PidStartTime unsupported here:", err)

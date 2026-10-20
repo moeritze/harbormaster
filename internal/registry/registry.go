@@ -116,10 +116,7 @@ func validateStateDir(dir string) error {
 	if fi.Mode()&os.ModeSymlink != 0 {
 		return fmt.Errorf("state dir %s is a symlink; refusing to operate", dir)
 	}
-	if mode := fi.Mode().Perm(); mode&0o022 != 0 {
-		return fmt.Errorf("state dir %s is group/other-writable (%o); fix with chmod 700", dir, mode)
-	}
-	return checkOwner(dir, fi)
+	return checkPerms(dir, fi)
 }
 
 // checkNotSymlink refuses to read or write a state file that has been

@@ -8,10 +8,13 @@ import (
 	"syscall"
 )
 
-// checkOwner refuses a state directory owned by another user: harbormaster
-// keeps one user's bookkeeping, and a directory somebody else owns is
-// somebody else's to change underneath us.
-func checkOwner(dir string, fi os.FileInfo) error {
+// checkPerms refuses a state directory that group or other can write, or
+// one owned by another user: harbormaster keeps one user's bookkeeping, and a
+// directory somebody else owns is somebody else's to change underneath us.
+func checkPerms(dir string, fi os.FileInfo) error {
+	if mode := fi.Mode().Perm(); mode&0o022 != 0 {
+		return fmt.Errorf("state dir %s is group/other-writable (%o); fix with chmod 700", dir, mode)
+	}
 	st, ok := fi.Sys().(*syscall.Stat_t)
 	if !ok {
 		return nil
