@@ -44,7 +44,9 @@ supervisor, and signal handling in `kill`/`release`.
   escapes into your shell or an agent's context. `--json` output is the stored
   value, for machines to handle.
 - `run` redacts secret-looking arguments (`*KEY*`, `*SECRET*`, `*TOKEN*`,
-  `*PASSWORD*`) in the banner it prints and in the `cmd` field it stores, and
+  `*PASSWORD*`, `*COOKIE*`, `*SIGNATURE*`, `--pass`, `-p`/`-u`/`-b`, URL
+  credentials, JSON body values, credential headers in any `-H`/`--header`
+  form) in the banner it prints and in the `cmd` field it stores, and
   rejects an `--env` name that is not a plain variable name or that would
   change how the child resolves programs and libraries (`PATH`, `LD_PRELOAD`
   and friends).

@@ -68,30 +68,16 @@ func Owns(me Identity, e registry.Entry, myWorktree string) bool {
 const maxLen = 256
 
 // Sanitize drops control and non-printable runes and caps at 256 bytes on a rune boundary.
-func Sanitize(s string) string { return sanitize(s, maxLen, "") }
-
-// SanitizeN is Sanitize with the cap chosen by the caller and the cut marked
-// with "…". It exists for values that are already the product of their own
-// length discipline -- RedactCmd's output, which is redacted and capped at
-// maxCmd -- where re-running the 256-byte identifier cap would throw away
-// most of a command line that was deliberately kept.
-func SanitizeN(s string, limit int) string { return sanitize(s, limit, "…") }
-
-func sanitize(s string, limit int, marker string) string {
+func Sanitize(s string) string {
 	var b strings.Builder
-	cut := false
 	for _, r := range s {
 		if r == utf8.RuneError || !unicode.IsPrint(r) {
 			continue
 		}
-		if b.Len()+utf8.RuneLen(r) > limit-len(marker) {
-			cut = true
+		if b.Len()+utf8.RuneLen(r) > maxLen {
 			break
 		}
 		b.WriteRune(r)
-	}
-	if cut {
-		b.WriteString(marker)
 	}
 	return b.String()
 }
@@ -100,11 +86,12 @@ var (
 	// sensitiveKey matches flag and variable names whose values are secrets.
 	// Substring matching is deliberate (spec §10: *KEY*, *SECRET*, ...): it
 	// fails safe by over-redacting names like --keyboard.
-	sensitiveKey = regexp.MustCompile(`(?i)(key|secret|token|password|passwd|pwd|auth|credential|bearer|dsn)`)
-	assignment   = regexp.MustCompile(`^(--?[A-Za-z0-9_-]+|[A-Za-z_][A-Za-z0-9_]*)=(.*)$`)
+	sensitiveKey = regexp.MustCompile(`(?i)(key|secret|token|password|passwd|pwd|pass\b|auth|credential|bearer|dsn|cookie|signature)`)
+	assignment   = regexp.MustCompile(`^(--?[A-Za-z0-9_-]+|[A-Za-z_][A-Za-z0-9_-]*)=(.*)$`)
 	// shortSecretFlag covers single-letter flags that conventionally take a
-	// password (mysql/psql/ssh -p, curl -u).
-	shortSecretFlag = regexp.MustCompile(`^-[pu]$`)
+	// secret (mysql/psql/ssh -p, curl -u, curl -b cookie). -b over-redacts
+	// elsewhere (git checkout -b name), which fails safe.
+	shortSecretFlag = regexp.MustCompile(`^-[pub]$`)
 	// shortSecretAttached is the same flags with the value glued on, which
 	// is how mysql is normally invoked: -pSuperSecret, -ualice:hunter2.
 	// Everything after the flag letter is the value.
@@ -115,13 +102,16 @@ var (
 	// inside a single argv entry.
 	tokenSep = regexp.MustCompile(`[\s&?;,]+`)
 	// jsonPair matches a "key": "value" pair in a JSON-ish request body, in
-	// either quote style, so `curl -d '{"api_key":"sk-live"}'` is masked.
-	jsonPair = regexp.MustCompile(`(["'])([A-Za-z0-9_.\-]+)(["'])(\s*:\s*)(["'])([^"']*)(["'])`)
+	// either quote style, so `curl -d '{"api_key":"sk-live"}'` is masked. A
+	// double-quoted value honors backslash escapes up to its closing quote.
+	jsonPair = regexp.MustCompile(`(["'])([A-Za-z0-9_.\-]+)(["'])(\s*:\s*)("(?:[^"\\]|\\.)*"|'[^']*')`)
 	// urlCreds finds scheme://user[:pass]@ anywhere in an argument.
 	urlCreds = regexp.MustCompile(`([A-Za-z][A-Za-z0-9+.-]*://)[^/@\s]+@`)
 	// authHeader matches "Name: value" / "Name:value" for headers that carry
 	// credentials, as one argument (curl -H "Authorization: Bearer x").
 	authHeader = regexp.MustCompile(`(?i)^(authorization|proxy-authorization|cookie|set-cookie|x-api-key|x-auth-token|api-key):\s*.*$`)
+	// headerFlag is -H/--header with the header glued on: -HAuthorization: x.
+	headerFlag = regexp.MustCompile(`^(-H|--header=)(.+)$`)
 	// bearerToken masks "Bearer <token>" wherever it appears.
 	bearerToken = regexp.MustCompile(`(?i)\bbearer\s+\S+`)
 )
@@ -169,6 +159,11 @@ func redactArg(a string, maskNext *bool) string {
 	}
 	if m := authHeader.FindStringSubmatch(a); m != nil {
 		return m[1] + ": ***"
+	}
+	if m := headerFlag.FindStringSubmatch(a); m != nil {
+		if h := authHeader.FindStringSubmatch(m[2]); h != nil {
+			return m[1] + h[1] + ": ***"
+		}
 	}
 	if m := shortSecretAttached.FindStringSubmatch(a); m != nil {
 		return m[1] + "***"
@@ -231,7 +226,8 @@ func redactJSONPairs(a string) string {
 		if !sensitiveKey.MatchString(g[2]) {
 			return m
 		}
-		return g[1] + g[2] + g[3] + g[4] + g[5] + "***" + g[7]
+		q := g[5][:1]
+		return g[1] + g[2] + g[3] + g[4] + q + "***" + q
 	})
 }
 

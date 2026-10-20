@@ -30,7 +30,7 @@ func Discover(dir string) Context {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), gitTimeout)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, git, "rev-parse", "--show-toplevel", "--git-common-dir", "--abbrev-ref", "HEAD")
+	cmd := exec.CommandContext(ctx, git, "rev-parse", "--path-format=absolute", "--show-toplevel", "--git-common-dir", "--abbrev-ref", "HEAD")
 	cmd.Dir = dir
 	out, err := cmd.Output()
 	if err != nil {
@@ -41,9 +41,6 @@ func Discover(dir string) Context {
 		return Context{}
 	}
 	top, common, branch := lines[0], lines[1], lines[2]
-	if common != "" && !filepath.IsAbs(common) {
-		common = filepath.Join(top, common)
-	}
 	repo := filepath.Dir(filepath.Clean(common))
 	if branch == "HEAD" {
 		branch = ""
