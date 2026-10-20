@@ -290,6 +290,58 @@ func TestReleaseOwnSessionSucceeds(t *testing.T) {
 	}
 }
 
+// TestReleaseOwnSessionFlagDoesNotOwnForeignPort: naming your own session id
+// must not turn a port-matched foreign entry into yours.
+func TestReleaseOwnSessionFlagDoesNotOwnForeignPort(t *testing.T) {
+	h := newHarness(t, "s1", "/wt/a")
+	called := false
+	h.app.Terminate = func(int, bool, time.Duration) error { called = true; return nil }
+	h.seed(t, registry.Entry{ID: "x", Port: 3001, PID: os.Getppid(), Session: "s2"})
+	if c := exitCode(h.run("release", "3001", "--session", "s1", "--kill")); c != 1 {
+		t.Fatalf("got %d", c)
+	}
+	f, _ := h.app.Store.Peek()
+	if len(f.Entries) != 1 || called {
+		t.Fatalf("foreign entry must stay unsignalled: %+v called=%v", f.Entries, called)
+	}
+}
+
+// TestReleaseKillKeepsEntryWhenGuardRefuses: an entry the guard will not let
+// us signal must not leave the registry, or its server runs on unregistered.
+func TestReleaseKillKeepsEntryWhenGuardRefuses(t *testing.T) {
+	h := newHarness(t, "s1", "/wt/a")
+	h.app.PidStartTime = func(int) (string, error) { return "t1", nil }
+	h.app.Terminate = func(int, bool, time.Duration) error { return nil }
+	h.seed(t, registry.Entry{ID: "nostart", Port: 3311, PID: os.Getppid(), Session: "s1", Spawned: true})
+	if c := exitCode(h.run("release", "3311", "--kill")); c == 0 {
+		t.Fatal("want non-zero exit")
+	}
+	f, _ := h.app.Store.Peek()
+	if len(f.Entries) != 1 {
+		t.Fatalf("entry must stay: %+v", f.Entries)
+	}
+	hist, _ := h.app.Store.History(0)
+	for _, r := range hist {
+		if r.Reason == "released" {
+			t.Fatalf("no released record expected: %+v", hist)
+		}
+	}
+}
+
+func TestReleaseKillRestoresEntryWhenTerminateFails(t *testing.T) {
+	h := newHarness(t, "s1", "/wt/a")
+	h.app.PidStartTime = func(int) (string, error) { return "t1", nil }
+	h.app.Terminate = func(int, bool, time.Duration) error { return errors.New("operation not permitted") }
+	h.seed(t, registry.Entry{ID: "own", Port: 3312, PID: os.Getppid(), Session: "s1", StartTime: "t1"})
+	if c := exitCode(h.run("release", "3312", "--kill")); c == 0 {
+		t.Fatal("want non-zero exit")
+	}
+	f, _ := h.app.Store.Peek()
+	if len(f.Entries) != 1 || f.Entries[0].ID != "own" {
+		t.Fatalf("entry must be restored: %+v", f.Entries)
+	}
+}
+
 func TestGcReportsPruned(t *testing.T) {
 	h := newHarness(t, "s1", "/wt/a")
 	h.seed(t, registry.Entry{ID: "dead", Port: 3001, PID: 11, Session: "s1"})

@@ -97,6 +97,9 @@ func validateEnvNames(names []string) error {
 // through checkPort so an already-running own entry on that port is refused
 // rather than silently double-registered (Finding 1).
 func resolveRunPort(a *app.App, flag int) (int, error) {
+	if flag < 0 || flag > 65535 {
+		return 0, exitf(ExitUsage, "invalid port %d", flag)
+	}
 	fromEnv := false
 	if flag == 0 {
 		if v := getenv("PORT"); v != "" {
