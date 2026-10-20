@@ -100,3 +100,10 @@ func TestOrDash(t *testing.T) {
 		}
 	}
 }
+
+func TestOwnerLineKeepsBaseNameOfLongPath(t *testing.T) {
+	wt := strings.Repeat("/segment", 30) + "/wt-name"
+	if ol := render.OwnerLine(registry.Entry{Agent: "claude", Worktree: wt}, time.Now()); !strings.Contains(ol, "segment/wt-name") {
+		t.Fatalf("base name lost: %q", ol)
+	}
+}

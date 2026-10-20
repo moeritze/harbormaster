@@ -11,22 +11,14 @@ import (
 	renderpkg "github.com/moeritze/harbormaster/internal/render"
 )
 
-// renderMax mirrors package render's truncation length; kept here only so
-// existing tests that assert on it keep compiling unchanged.
-const renderMax = 120
-
-// render, shortSession, shortPath, ownerLine, age, writeTable, and orDash are
+// render, shortPath, ownerLine, writeTable, and orDash are
 // thin wrappers over package render, which owns entry rendering (moved there
 // so hooks can share it without importing cli).
 func render(s string) string { return renderpkg.Text(s) }
 
-func shortSession(s string) string { return renderpkg.ShortSession(s) }
-
 func shortPath(p string) string { return renderpkg.ShortPath(p) }
 
 func ownerLine(e registry.Entry, now time.Time) string { return renderpkg.OwnerLine(e, now) }
-
-func age(now, t time.Time) string { return renderpkg.Age(now, t) }
 
 func writeTable(w io.Writer, entries []registry.Entry, now time.Time) error {
 	return renderpkg.Table(w, entries, now)

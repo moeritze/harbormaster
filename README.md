@@ -28,6 +28,8 @@ Or download an archive from the [releases page](https://github.com/moeritze/harb
       --provenance-path harbormaster.intoto.jsonl \
       --source-uri github.com/moeritze/harbormaster --source-tag v0.1.0
 
+Requires git 2.31 or newer for worktree identity; with older git harbormaster keys by directory, as outside a repo.
+
 `go install …@main` builds the unsigned tip of `main`; use it only for development. `make install` from a checkout also links `hm` as a short alias.
 
 ## Usage

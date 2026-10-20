@@ -80,7 +80,7 @@ func OwnerLine(e registry.Entry, now time.Time) string {
 	if e.Session != "" {
 		who += " session " + Text(ShortSession(e.Session))
 	}
-	where := ShortPath(Text(e.Worktree))
+	where := Text(ShortPath(e.Worktree))
 	label := ""
 	if e.Label != "" {
 		label = fmt.Sprintf("%q, ", Text(e.Label))

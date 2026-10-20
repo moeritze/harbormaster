@@ -1,6 +1,7 @@
 package gitctx_test
 
 import (
+	"os"
 	"os/exec"
 	"path/filepath"
 	"testing"
@@ -67,5 +68,27 @@ func TestDiscoverRepoAndWorktree(t *testing.T) {
 	}
 	if !filepath.IsAbs(cm.Worktree) {
 		t.Fatalf("main worktree not absolute: %q", cm.Worktree)
+	}
+}
+
+// TestDiscoverFromSubdir: --git-common-dir is relative to the cwd, not the
+// toplevel, so a subdirectory of a main checkout used to yield a bogus repo.
+func TestDiscoverFromSubdir(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git missing")
+	}
+	repo, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	git(t, repo, "init", "-q")
+	git(t, repo, "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "--allow-empty", "-m", "init")
+	sub := filepath.Join(repo, "sub")
+	if err := os.Mkdir(sub, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	c := gitctx.Discover(sub)
+	if c.Repo != repo || c.Worktree != repo {
+		t.Fatalf("got repo %q worktree %q, want %q", c.Repo, c.Worktree, repo)
 	}
 }

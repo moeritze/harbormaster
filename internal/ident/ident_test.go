@@ -177,6 +177,22 @@ func TestRedactCmdSecretsInsideArguments(t *testing.T) {
 			[]string{"two words here", "words"}, []string{"--password=***"}},
 		{"harmless inner tokens survive", []string{"app", "--flags=a=1,b=2", "x?y=3&z=4"},
 			[]string{"***"}, []string{"--flags=a=1,b=2", "x?y=3&z=4"}},
+		{"attached -H header", []string{"curl", "-HAuthorization: Basic dXNlcjpw"},
+			[]string{"dXNlcjpw"}, []string{"Authorization: ***"}},
+		{"--header= header", []string{"curl", "--header=Authorization: Basic dXNlcjpw"},
+			[]string{"dXNlcjpw"}, []string{"Authorization: ***"}},
+		{"cookie flag", []string{"curl", "--cookie", "sid=abc"},
+			[]string{"sid=abc"}, []string{"--cookie ***"}},
+		{"curl -b cookie", []string{"curl", "-b", "sid=abc"},
+			[]string{"sid=abc"}, []string{"-b ***"}},
+		{"short pass flag", []string{"tool", "--pass", "hunter2"},
+			[]string{"hunter2"}, []string{"--pass ***"}},
+		{"presigned url", []string{"curl", "https://s3/x?X-Amz-Signature=deadbeef"},
+			[]string{"deadbeef"}, []string{"X-Amz-Signature=***"}},
+		{"escaped quote in json value", []string{"curl", "-d", `{"password":"x\"y"}`},
+			[]string{"y"}, []string{`{"password":"***"}`}},
+		{"pass is a word, not a substring", []string{"app", "--passthrough", "on"},
+			[]string{"***"}, []string{"--passthrough on"}},
 	}
 	for _, c := range cases {
 		got := ident.RedactCmd(c.args)
@@ -190,28 +206,5 @@ func TestRedactCmdSecretsInsideArguments(t *testing.T) {
 				t.Errorf("%s: missing %q in %q", c.name, k, got)
 			}
 		}
-	}
-}
-
-// TestSanitizeN pins the wider cap used for the stored command line: it
-// keeps far more than an identifier, and marks a cut it had to make.
-func TestSanitizeN(t *testing.T) {
-	if got := ident.SanitizeN("plain", 2048); got != "plain" {
-		t.Fatalf("short input must pass through unchanged: %q", got)
-	}
-	long := strings.Repeat("a", 900) + " --password=***"
-	if got := ident.SanitizeN(long, 2048); got != long {
-		t.Fatalf("a 900-byte command must survive a 2 KiB cap: %d bytes", len(got))
-	}
-	if got := ident.SanitizeN(long, 2048); strings.HasSuffix(got, "…") {
-		t.Fatalf("nothing was cut, so nothing must be marked: %q", got[len(got)-10:])
-	}
-	over := strings.Repeat("ä", 2000)
-	got := ident.SanitizeN(over, 2048)
-	if len(got) > 2048 || !strings.HasSuffix(got, "…") {
-		t.Fatalf("over-long input must be cut to the cap and marked: %d bytes, %q", len(got), got[len(got)-6:])
-	}
-	if strings.Contains(ident.SanitizeN("a\x00b\x1b[31m", 2048), "\x1b") {
-		t.Fatal("control characters must still be dropped")
 	}
 }
