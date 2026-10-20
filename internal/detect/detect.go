@@ -51,7 +51,7 @@ var (
 
 	// hmClauseRe matches a whole "(harbormaster|hm) <subcommand> ..."
 	// clause, from its leading word up to (but not including) the next
-	// shell control operator (;, &&, ||, |) or the end of the string.
+	// shell control operator (;, &&, ||, |), a newline, or the end of the string.
 	// blankHmClauses uses it to blank out harbormaster's own subcommands
 	// before kill-pattern matching, so a compound command like
 	// "hm kill 3000 && kill -9 1234" still finds the real "kill -9 1234"
@@ -61,13 +61,13 @@ var (
 	// "hm" would let an unrelated program that happens to be called hm (or
 	// a typo, "hm x lsof -ti:3100 | xargs kill") blank out a real kill and
 	// silently disable the hook for that line.
-	hmClauseRe = regexp.MustCompile(`(?:^|[\s;&|(])(?:harbormaster|hm)\s+(?:ls|kill|check|claim|release|port|gc|history|install|uninstall|hook|version)\b[^;&|]*`)
+	hmClauseRe = regexp.MustCompile(`(?:^|[\s;&|(])(?:harbormaster|hm)\s+(?:ls|kill|check|claim|release|port|gc|history|install|uninstall|hook|version)\b[^;&|\n]*`)
 
 	// hmRunPrefixRe matches only the wrapper part of "hm run [flags] --",
 	// so the wrapped command stays visible: `hm run -- kill 1234` is a kill
 	// and `hm run -- npm run dev` is a (wrapped) server start. A `run`
 	// clause without "--" is blanked whole, like any other subcommand.
-	hmRunPrefixRe = regexp.MustCompile(`(?:^|[\s;&|(])(?:harbormaster|hm)\s+run\b(?:[^;&|]*?\s--(?:\s|$)|[^;&|]*)`)
+	hmRunPrefixRe = regexp.MustCompile(`(?:^|[\s;&|(])(?:harbormaster|hm)\s+run\b(?:[^;&|\n]*?\s--(?:\s|$)|[^;&|\n]*)`)
 
 	// Known blind spots (this package is a heuristic by design, see the
 	// package doc comment): these read command *text*, not where or
@@ -80,18 +80,18 @@ var (
 		// after kill is always a signal spec, never a pid, so it never
 		// satisfies the target group on its own (that's what stops
 		// "xargs kill -9" with no literal pid from being misread as pid
-		// 9). A literal "--" switches to the process-group form, where a
-		// negative number is the target.
-		{"kill", regexp.MustCompile(`(?:^|[\s;&|($])kill\s+(?:(?:-s\s+[A-Za-z0-9]+\s+|-[A-Za-z0-9]+\s+)*\d+(?:\s+\d+)*|--\s+-?\d+(?:\s+-?\d+)*)`)},
+		// 9). A literal "--", or a negative number after at least one
+		// signal spec, is the process-group form.
+		{"kill", killPidRe},
 		{"pkill", regexp.MustCompile(`(?:^|[\s;&|(])pkill\b`)},
 		{"killall", regexp.MustCompile(`(?:^|[\s;&|(])killall\b`)},
-		{"fuser-k", regexp.MustCompile(`(?:^|[\s;&|(])fuser\s+-k\b`)},
-		{"lsof-t", regexp.MustCompile(`(?:^|[\s;&|($])lsof\s+(?:-\w+\s+)*-t\w*\s*(?:-i)?\s*(?:tcp)?:?\s*\d+`)},
+		{"fuser-k", regexp.MustCompile(`(?:^|[\s;&|(])` + fuserK + `\b`)},
+		{"lsof-t", regexp.MustCompile("(?:^|[\\s;&|($`])" + lsofT)},
 		{"kill-port", regexp.MustCompile(`(?:^|[\s;&|(])(?:npx\s+)?kill-port\b`)},
 	}
 
 	serverPatterns = []pattern{
-		{"pkg-script", regexp.MustCompile(`(?:^|[\s;&|(])(?:npm|pnpm|yarn|bun)\s+(?:run\s+)?(?:dev|start|serve|preview)\b`)},
+		{"pkg-script", regexp.MustCompile(`(?:^|[\s;&|(])(?:npm|pnpm|yarn|bun)\s+(?:run\s+)?(?:dev|start|serve|preview)(?:$|[\s;&|)])`)},
 		{"next", regexp.MustCompile(`(?:^|[\s;&|(])(?:npx\s+)?next\s+dev\b`)},
 		{"vite", regexp.MustCompile(`(?:^|[\s;&|(])(?:npx\s+)?vite(?:\s+(?:preview|dev|serve))?(?:\s|$)`)},
 		{"astro", regexp.MustCompile(`(?:^|[\s;&|(])(?:npx\s+)?astro\s+dev\b`)},
@@ -109,8 +109,10 @@ var (
 		{"cargo-run-port", regexp.MustCompile(`(?:^|[\s;&|(])cargo\s+run\b.*--port\b`)},
 	}
 
-	// Explicit build/test invocations that would otherwise match "vite".
-	notServerRe = regexp.MustCompile(`(?:^|[\s;&|(])vite\s+build\b`)
+	// Clauses that would otherwise match "vite" or a package script: a
+	// build, or installing/removing packages ("npm i -D vite"). Blanked up
+	// to the next control operator, so "npm i && npm run dev" still counts.
+	notServerRe = regexp.MustCompile(`(?:^|[\s;&|(])(?:vite\s+build|(?:npm|pnpm|yarn|bun)\s+(?:i|install|add|remove|rm|uninstall))\b[^;&|\n]*`)
 
 	// portPatterns are unconditional: each targets a marker specific
 	// enough (an explicit --port/PORT=, an address, or a harbormaster
@@ -120,7 +122,8 @@ var (
 		regexp.MustCompile(`\bPORT=(\d{2,5})\b`),
 		regexp.MustCompile(`\bhttp\.server\s+(\d{2,5})\b`),
 		regexp.MustCompile(`(?:localhost|127\.0\.0\.1|0\.0\.0\.0|\[::1\]):(\d{2,5})\b`),
-		regexp.MustCompile(`\b(?:lsof\s+(?:-\w+\s+)*-t\w*\s*(?:-i)?\s*(?:tcp)?:?\s*|fuser\s+-k\s+)(\d{2,5})\b`),
+		regexp.MustCompile(`\b` + lsofT),
+		regexp.MustCompile(`\b` + fuserK + `\s+(\d{2,5})\b`),
 		regexp.MustCompile(`\bkill-port\s+((?:\d{2,5}\s*)+)`),
 		regexp.MustCompile(`\b(?:hm|harbormaster)\s+(?:kill|check|claim|release)\s+(\d{2,5})\b`),
 	}
@@ -132,10 +135,22 @@ var (
 	// or ServerStart by some other, unambiguous signal (see Classify).
 	pFlagPortRe = regexp.MustCompile(`(?:^|\s)-p\s*(\d{2,5})\b`)
 
-	// killPidRe mirrors the "kill" classify pattern's two forms: plain
+	// killPidRe is also the "kill" classify pattern. Its two forms: plain
 	// pids (group 1, no leading dash, since a leading "-9" is a signal)
-	// or, after a literal "--", process-group targets (group 2, dash allowed).
-	killPidRe = regexp.MustCompile(`(?:^|[\s;&|(])kill\s+(?:(?:-s\s+[A-Za-z0-9]+\s+|-[A-Za-z0-9]+\s+)*(\d+(?:\s+\d+)*)|--\s+(-?\d+(?:\s+-?\d+)*))`)
+	// or process-group targets (group 2, dash allowed) after a literal
+	// "--" or after at least one signal spec ("kill -9 -1234").
+	killPidRe = regexp.MustCompile("(?:^|[\\s;&|($`])(?:/\\S*/)?kill\\s+(?:" + sigFlags + `*(\d+(?:\s+\d+)*)|(?:` + sigFlags + `*--\s+|` + sigFlags + `+)(-?\d+(?:\s+-?\d+)*))`)
+)
+
+const (
+	sigFlags = `(?:-s\s+[A-Za-z0-9]+\s+|-[A-Za-z0-9]+\s+)`
+
+	// lsofT is "lsof ... -t ... -i PORT" with -t before or after the -i
+	// port spec; the port is group 1 or group 2.
+	lsofT = `lsof\s+(?:(?:-\S+\s+)*-t\w*\s*(?:(?:-\S+\s+)*-i)?\s*(?:tcp|TCP)?:?\s*(\d+)|(?:-\S+\s+)*-i\s*(?:tcp|TCP)?:?\s*(\d+)(?:\s+-\S+)*\s+-t\w*\b)`
+
+	// fuserK is fuser with -k anywhere among its flags ("fuser -n tcp -k").
+	fuserK = `fuser\s+(?:-\S+\s+(?:\w+\s+)?)*-k`
 )
 
 // blankHmClauses replaces every harbormaster/hm subcommand clause in cmd
@@ -178,9 +193,10 @@ func Classify(cmd string) Result {
 			break
 		}
 	}
-	if r.Class == None && !notServerRe.MatchString(cmd) {
+	if r.Class == None {
+		serverScan := notServerRe.ReplaceAllString(cmd, " ")
 		for _, p := range serverPatterns {
-			if p.re.MatchString(cmd) {
+			if p.re.MatchString(serverScan) {
 				r.Class, r.Matched = ServerStart, p.name
 				break
 			}
@@ -205,7 +221,9 @@ func ports(cmd string, includePFlag bool) []int {
 	}
 	for _, re := range portPatterns {
 		for _, m := range re.FindAllStringSubmatch(cmd, -1) {
-			add(m[1])
+			for _, g := range m[1:] {
+				add(g)
+			}
 		}
 	}
 	if includePFlag {
