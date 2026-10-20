@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -36,6 +37,9 @@ func open(t *testing.T) *registry.Store {
 }
 
 func TestOpenCreatesDirWithMode0700(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("windows has no POSIX mode bits")
+	}
 	s := open(t)
 	st, err := os.Stat(s.Dir())
 	if err != nil {
@@ -72,7 +76,7 @@ func TestUpdatePersistsAndFileMode0600(t *testing.T) {
 		t.Fatalf("got %+v", f.Entries)
 	}
 	st, _ := os.Stat(filepath.Join(s.Dir(), "registry.json"))
-	if st.Mode().Perm() != 0o600 {
+	if runtime.GOOS != "windows" && st.Mode().Perm() != 0o600 { // windows has no POSIX mode bits
 		t.Fatalf("mode %o", st.Mode().Perm())
 	}
 	left, err := filepath.Glob(filepath.Join(s.Dir(), "registry-*.tmp"))
@@ -512,6 +516,9 @@ func TestOpenRefusesSymlinkedStateDir(t *testing.T) {
 }
 
 func TestOpenRefusesGroupOtherWritableStateDir(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("windows has no POSIX mode bits; the check is unix-only")
+	}
 	dir := filepath.Join(t.TempDir(), "hm")
 	if err := os.Mkdir(dir, 0o777); err != nil { //nolint:gosec // the world-writable dir is exactly what this test asserts is refused
 		t.Fatal(err)

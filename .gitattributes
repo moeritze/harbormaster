@@ -1,0 +1,2 @@
+# Embedded skill files and test fixtures must be LF on every OS (Windows checkouts default to CRLF).
+* text=auto eol=lf

@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -382,7 +383,11 @@ func TestAgentsMDKeepsFileMode(t *testing.T) {
 	check := func(step string) {
 		t.Helper()
 		st, err := os.Stat(p)
-		if err != nil || st.Mode().Perm() != 0o644 {
+		if err != nil {
+			t.Fatalf("%s: %v", step, err)
+		}
+		// Windows has no POSIX mode bits to keep.
+		if runtime.GOOS != "windows" && st.Mode().Perm() != 0o644 {
 			t.Fatalf("%s: mode %v, %v", step, st.Mode().Perm(), err)
 		}
 		if es, _ := os.ReadDir(dir); len(es) != 1 {
