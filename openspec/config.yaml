@@ -1,0 +1,20 @@
+schema: spec-driven
+
+context: |
+  Go 1.27 CLI (cobra). Registry of local dev servers shared by many concurrent
+  agent sessions of one OS user. State: registry.json + history.jsonl under a
+  flock (registry.lock). Hooks for Claude Code and Cursor run on every agent
+  shell command: must answer fast, fail open, never auto-approve.
+  Packages: internal/{registry,liveness,runner,app,cli,ident,detect,ports,
+  gitctx,render,tools,hooks,install}. README.md documents user-facing behavior.
+  Conventions: conventional commits; `make test` (go test -race), `make lint`
+  (golangci-lint), coverage >= 80% for internal/.
+  Expected load: one machine, 5-20 concurrent agent sessions.
+
+rules:
+  proposal:
+    - Name the audit finding numbers the change fixes.
+    - Keep proposals short; include Non-goals.
+  tasks:
+    - Each bug fix starts with a failing regression test.
+    - Prefer the smallest fix; deletion over addition.
