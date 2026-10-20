@@ -16,10 +16,6 @@ type settings struct {
 	raw  []byte // exact bytes read from disk, nil if the file did not exist; used for the backup
 }
 
-func dirOf(path string) string {
-	return filepath.Dir(path)
-}
-
 func readSettings(path string) (*settings, error) {
 	s := &settings{doc: map[string]any{}, perm: 0o600}
 	b, err := os.ReadFile(path) //nolint:gosec // path is derived from the caller's configured ConfigDir
@@ -95,20 +91,30 @@ func refuseSymlink(path string) error {
 }
 
 func (s *settings) write(path string) error {
-	b, err := json.MarshalIndent(s.doc, "", "  ")
+	// SetEscapeHTML(false): Marshal would turn a user's "a && b" into "a \u0026\u0026 b".
+	var buf bytes.Buffer
+	enc := json.NewEncoder(&buf)
+	enc.SetEscapeHTML(false)
+	enc.SetIndent("", "  ")
+	if err := enc.Encode(s.doc); err != nil {
+		return err
+	}
+	return writeAtomic(path, buf.Bytes(), s.perm)
+}
+
+// writeAtomic replaces path with b via a temp file in the same directory, so
+// a crash mid-write leaves either the old file or the new one, never half.
+func writeAtomic(path string, b []byte, perm os.FileMode) error {
+	tmp, err := os.CreateTemp(filepath.Dir(path), "."+filepath.Base(path)+"-*")
 	if err != nil {
 		return err
 	}
-	tmp, err := os.CreateTemp(dirOf(path), ".settings-*.json")
-	if err != nil {
-		return err
-	}
-	if _, err := tmp.Write(append(b, '\n')); err != nil {
+	if _, err := tmp.Write(b); err != nil {
 		_ = tmp.Close()
 		_ = os.Remove(tmp.Name())
 		return err
 	}
-	if err := tmp.Chmod(s.perm); err != nil {
+	if err := tmp.Chmod(perm); err != nil {
 		_ = tmp.Close()
 		_ = os.Remove(tmp.Name())
 		return err

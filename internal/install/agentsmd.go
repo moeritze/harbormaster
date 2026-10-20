@@ -46,7 +46,7 @@ func AgentsMD(path string, dryRun bool) (Report, error) {
 	if dryRun {
 		return r, nil
 	}
-	return r, os.WriteFile(path, []byte(next), 0o600) //nolint:gosec // path is the caller's chosen AGENTS.md
+	return r, writeAtomic(path, []byte(next), modeOf(path))
 }
 
 // AgentsMDUninstall removes the block; an AGENTS.md left empty is deleted.
@@ -84,7 +84,15 @@ func AgentsMDUninstall(path string, dryRun bool) (Report, error) {
 	if dryRun {
 		return r, nil
 	}
-	return r, os.WriteFile(path, []byte(next), 0o600) //nolint:gosec // path is the caller's chosen AGENTS.md
+	return r, writeAtomic(path, []byte(next), modeOf(path))
+}
+
+// modeOf is the existing file's permission bits, 0o600 for a new file.
+func modeOf(path string) os.FileMode {
+	if st, err := os.Stat(path); err == nil {
+		return st.Mode().Perm()
+	}
+	return 0o600
 }
 
 // blockBounds locates the harbormaster block: start is the offset of the

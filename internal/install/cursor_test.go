@@ -367,3 +367,34 @@ func TestBackupNeverOverwritesAnEarlierOne(t *testing.T) {
 		t.Fatalf("the second backup must hold the post-install file: %q %v", b, err)
 	}
 }
+
+// TestAgentsMDKeepsFileMode guards the temp-file-and-rename rewrite: the
+// file keeps its mode and no temp file is left behind.
+func TestAgentsMDKeepsFileMode(t *testing.T) {
+	dir := t.TempDir()
+	p := filepath.Join(dir, "AGENTS.md")
+	if err := os.WriteFile(p, []byte("# Project\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(p, 0o644); err != nil { //nolint:gosec // test checks a 0644 mode survives
+		t.Fatal(err)
+	}
+	check := func(step string) {
+		t.Helper()
+		st, err := os.Stat(p)
+		if err != nil || st.Mode().Perm() != 0o644 {
+			t.Fatalf("%s: mode %v, %v", step, st.Mode().Perm(), err)
+		}
+		if es, _ := os.ReadDir(dir); len(es) != 1 {
+			t.Fatalf("%s: stray files %v", step, es)
+		}
+	}
+	if _, err := install.AgentsMD(p, false); err != nil {
+		t.Fatal(err)
+	}
+	check("install")
+	if _, err := install.AgentsMDUninstall(p, false); err != nil {
+		t.Fatal(err)
+	}
+	check("uninstall")
+}

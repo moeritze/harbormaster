@@ -479,3 +479,40 @@ func TestInstallRefusesWrongTypedEventKey(t *testing.T) {
 		t.Fatalf("settings.json was touched: %s", b)
 	}
 }
+
+// TestUninstallKeepsForeignCommandInSharedEntry: a user may add their own
+// command to the entry we installed. Uninstall removes only our command.
+func TestUninstallKeepsForeignCommandInSharedEntry(t *testing.T) {
+	dir := t.TempDir()
+	orig := `{"hooks":{"PreToolUse":[{"matcher":"Bash","hooks":[{"type":"command","command":"harbormaster hook claude PreToolUse"},{"type":"command","command":"my-guard.sh"}]}]}}`
+	_ = os.WriteFile(filepath.Join(dir, "settings.json"), []byte(orig), 0o600)
+	r, err := install.ClaudeUninstall(opts(dir))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(r.Removed) != 1 {
+		t.Fatalf("%+v", r)
+	}
+	h, _ := readSettings(t, dir)["hooks"].(map[string]any)
+	pre, _ := h["PreToolUse"].([]any)
+	if len(pre) != 1 {
+		t.Fatalf("shared entry must survive: %v", pre)
+	}
+	hs := pre[0].(map[string]any)["hooks"].([]any)
+	if len(hs) != 1 || hs[0].(map[string]any)["command"] != "my-guard.sh" {
+		t.Fatalf("want only my-guard.sh, got %v", hs)
+	}
+}
+
+func TestInstallDoesNotEscapeHTML(t *testing.T) {
+	dir := t.TempDir()
+	orig := `{"hooks":{"Stop":[{"hooks":[{"type":"command","command":"cd x && make lint <a >b"}]}]}}`
+	_ = os.WriteFile(filepath.Join(dir, "settings.json"), []byte(orig), 0o600)
+	if _, err := install.Claude(opts(dir)); err != nil {
+		t.Fatal(err)
+	}
+	b, _ := os.ReadFile(filepath.Join(dir, "settings.json")) //nolint:gosec // test-controlled t.TempDir path
+	if !strings.Contains(string(b), "cd x && make lint <a >b") {
+		t.Fatalf("user string escaped:\n%s", b)
+	}
+}
