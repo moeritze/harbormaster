@@ -2,6 +2,8 @@ package cli
 
 import (
 	"fmt"
+	"strings"
+	"time"
 
 	"github.com/spf13/cobra"
 
@@ -39,7 +41,8 @@ func newRelease(a *app.App) *cobra.Command {
 			if err := requireSession(a, force); err != nil {
 				return err
 			}
-			var removed []registry.Entry
+			var removed, released []registry.Entry
+			var failed []string
 			err := registryErr(a.Store.Update(func(f *registry.File) error {
 				kept := f.Entries[:0]
 				for _, e := range f.Entries {
@@ -50,14 +53,20 @@ func newRelease(a *app.App) *cobra.Command {
 						kept = append(kept, e)
 						continue
 					}
-					// Ownership is checked for every matched entry, not just
-					// port matches: `release --session X` from another session
-					// would otherwise kill X's servers with no --force. A
-					// session id the caller actually owns still passes.
-					mine := ident.Owns(a.Ident, e, a.Git.Worktree) ||
-						(session != "" && session == a.Ident.Session)
-					if !force && !mine {
+					// Ownership is checked for every matched entry, whichever
+					// selector matched it: naming a session id, even your own,
+					// is no claim on another session's entry on that port.
+					if !force && !ident.Owns(a.Ident, e, a.Git.Worktree) {
 						return exitf(ExitDenied, "port %d owned by %s. Use --force to override ownership.", e.Port, ownerLine(e, a.Clock()))
+					}
+					// An entry we may not signal stays registered: removing it
+					// would leave its server running unknown to the registry.
+					if kill {
+						if err := guardEntry(a, e); err != nil {
+							failed = append(failed, fmt.Sprintf("port %d: %v", e.Port, err))
+							kept = append(kept, e)
+							continue
+						}
 					}
 					removed = append(removed, e)
 				}
@@ -75,20 +84,26 @@ func newRelease(a *app.App) *cobra.Command {
 			var histErr error
 			for _, e := range removed {
 				if kill {
-					if err := terminateEntry(a, e); err != nil {
-						_, _ = fmt.Fprintf(a.Stderr, "warn: kill pid %d: %v\n", e.PID, err)
+					if err := terminateFn(a)(e.PID, e.Spawned, 10*time.Second); err != nil {
+						restoreAfterFailedKill(a, e, true)
+						failed = append(failed, fmt.Sprintf("port %d: signal pid %d: %v", e.Port, e.PID, err))
+						continue
 					}
 				}
+				released = append(released, e)
 				if err := a.Store.AppendHistory(registry.HistoryRecord{Entry: e, Reason: "released", At: a.Clock()}); err != nil && histErr == nil {
 					histErr = err
 				}
 			}
 			if asJSON {
-				if err := writeJSON(a.Stdout, removed); err != nil {
+				if err := writeJSON(a.Stdout, released); err != nil {
 					return err
 				}
-			} else if _, err := fmt.Fprintf(a.Stdout, "released %d\n", len(removed)); err != nil {
+			} else if _, err := fmt.Fprintf(a.Stdout, "released %d\n", len(released)); err != nil {
 				return err
+			}
+			if len(failed) > 0 {
+				return exitf(ExitDenied, "could not stop: %s", strings.Join(failed, "; "))
 			}
 			return registryErr(histErr)
 		},

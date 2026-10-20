@@ -63,7 +63,8 @@ its process started, so a pid that has been recycled since it was registered
 is refused instead of signalled. An entry without a recorded start time (an
 older build, a failed lookup) is never signalled as a process group, and
 nothing, not even `ls`, fills one in later: stop that process yourself or
-drop the entry with `release`.
+drop the entry with `release`. `release --kill` leaves an entry registered
+and exits 1 when it may not or cannot stop its process.
 
 The only way to end up with no session id at all is setting `HARBORMASTER_AGENT`
 without `HARBORMASTER_SESSION` -- every other path always yields a non-empty

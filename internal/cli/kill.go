@@ -158,13 +158,3 @@ func terminateFn(a *app.App) func(pid int, group bool, timeout time.Duration) er
 	}
 	return runner.Terminate
 }
-
-// terminateEntry applies the safety guard, then terminates. Entries created by
-// `run` own a process group and are signaled as one; every other entry (a
-// claimed pid, or a row written by an older build) is signaled individually.
-func terminateEntry(a *app.App, e registry.Entry) error {
-	if err := guardEntry(a, e); err != nil {
-		return err
-	}
-	return terminateFn(a)(e.PID, e.Spawned, 10*time.Second)
-}

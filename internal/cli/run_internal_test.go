@@ -95,3 +95,13 @@ func TestRunResultToErrSuccess(t *testing.T) {
 		t.Fatalf("got %v", err)
 	}
 }
+
+func TestResolveRunPortRejectsOutOfRange(t *testing.T) {
+	a := &app.App{Now: time.Now}
+	for _, p := range []int{70000, -5} {
+		_, err := resolveRunPort(a, p)
+		if ee, ok := err.(*ExitError); !ok || ee.Code != ExitUsage {
+			t.Fatalf("port %d: got %v", p, err)
+		}
+	}
+}
