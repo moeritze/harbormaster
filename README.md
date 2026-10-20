@@ -82,6 +82,8 @@ when `lsof` is unavailable (including on Windows).
 `harbormaster port` prints a stable port for the current worktree, derived from
 its path and kept inside `HARBORMASTER_BASE`..`HARBORMASTER_BASE+HARBORMASTER_RANGE`
 (default 3000-3999). Put it in `.env.local` once and your OAuth redirects stay valid.
+It always prints that port; if another session or process holds it, a warning on
+stderr names the port `run` would use instead.
 
 ### Exit codes
 

@@ -13,9 +13,6 @@ import (
 // MaxStdin caps the hook payload we are willing to parse.
 const MaxStdin = 1 << 20
 
-// Events lists the Claude Code events harbormaster handles.
-var Events = []string{"SessionStart", "PreToolUse", "PostToolUse", "SessionEnd"}
-
 type payload struct {
 	SessionID string `json:"session_id"`
 	Cwd       string `json:"cwd"`

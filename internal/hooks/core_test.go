@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -506,5 +507,60 @@ func TestHookLogsDamagedRegistryWithoutQuarantine(t *testing.T) {
 	}
 	if matches, _ := filepath.Glob(filepath.Join(x.st.Dir(), "registry.json.corrupt-*")); len(matches) != 0 {
 		t.Fatalf("a hook must not quarantine, found %v", matches)
+	}
+}
+
+// TestPreShellIgnoresDeadForeignEntries: an entry whose process is gone
+// protects nothing, so it must not block a restart or a kill of its pid.
+func TestPreShellIgnoresDeadForeignEntries(t *testing.T) {
+	x := newH(t)
+	x.seed(t, registry.Entry{ID: "a", Port: 3000, PID: 4242, Agent: "claude", Session: "other", Worktree: "/wt/y"})
+	x.prober.alive[4242] = false
+	for _, cmd := range []string{"npm run dev -- --port 3000", "kill 4242"} {
+		if r := x.core.Handle(ev(hooks.PreShell, "me", cmd)); r.Decision != hooks.Allow {
+			t.Fatalf("%q: %+v", cmd, r)
+		}
+	}
+}
+
+// TestHookPortHintDoesNotLoad: the port hint comes from the peeked entries.
+// A Load would prune the dead entry below and write the registry back.
+func TestHookPortHintDoesNotLoad(t *testing.T) {
+	x := newH(t)
+	x.core.Strict = true
+	x.seed(t, registry.Entry{ID: "a", Port: 3100, PID: 4242, Agent: "claude", Session: "other", Worktree: "/wt/y"})
+	x.prober.alive[4242] = false
+	r := x.core.Handle(ev(hooks.PreShell, "me", "npm run dev"))
+	want := fmt.Sprint(ports.Deterministic("/wt/x", ports.Config{Base: 3000, Range: 1000}))
+	if r.Decision != hooks.Deny || !strings.Contains(r.Reason, "port: "+want+")") {
+		t.Fatalf("want port %s in %+v", want, r)
+	}
+	if f, err := x.st.Peek(); err != nil || len(f.Entries) != 1 {
+		t.Fatalf("the hook wrote the registry: %v %+v", err, f)
+	}
+}
+
+// TestSessionEndGivesUpOnHeldLock: Claude Code gives SessionEnd 3 s; the
+// registry update must give up well before that and fail open.
+func TestSessionEndGivesUpOnHeldLock(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("registry lock is a no-op on windows")
+	}
+	x := newH(t)
+	held, release := make(chan struct{}), make(chan struct{})
+	go func() {
+		_ = x.st.Update(func(*registry.File) error { close(held); <-release; return nil })
+	}()
+	<-held
+	defer close(release)
+	start := time.Now()
+	if r := x.core.Handle(endEv("me", "logout")); r.Decision != hooks.Allow {
+		t.Fatalf("%+v", r)
+	}
+	if d := time.Since(start); d > 2*time.Second {
+		t.Fatalf("session end waited %s for the lock", d)
+	}
+	if !strings.Contains(x.log.String(), "locked") {
+		t.Fatalf("expected the lock failure in the log, got %q", x.log.String())
 	}
 }
