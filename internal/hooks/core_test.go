@@ -485,11 +485,11 @@ func TestClipCapsOnARuneBoundary(t *testing.T) {
 	}
 }
 
-// TestQuarantineReachesTheHookLog: a hook has no terminal to warn on, so a
-// registry that had to be quarantined must be recorded where hook problems
-// are recorded. Otherwise the only notice of a destroyed registry would go
-// to the agent's plumbing and be lost.
-func TestQuarantineReachesTheHookLog(t *testing.T) {
+// TestHookLogsDamagedRegistryWithoutQuarantine: a hook has no terminal to
+// warn on, so a damaged registry must be recorded in the hook log. Hooks read
+// without the lock, so they must leave the file in place for the next CLI
+// command to quarantine.
+func TestHookLogsDamagedRegistryWithoutQuarantine(t *testing.T) {
 	x := newH(t)
 	if err := os.WriteFile(filepath.Join(x.st.Dir(), "registry.json"), []byte(`{"version":1,"entries":[`), 0o600); err != nil {
 		t.Fatal(err)
@@ -498,7 +498,13 @@ func TestQuarantineReachesTheHookLog(t *testing.T) {
 	if res.Decision != hooks.Allow {
 		t.Fatalf("a quarantine must not stop the session: %+v", res)
 	}
-	if !strings.Contains(x.log.String(), "registry:") || !strings.Contains(x.log.String(), "moved it to") {
-		t.Fatalf("expected the quarantine in the hook log, got %q", x.log.String())
+	if !strings.Contains(x.log.String(), "parse registry") {
+		t.Fatalf("expected the parse error in the hook log, got %q", x.log.String())
+	}
+	if _, err := os.Stat(filepath.Join(x.st.Dir(), "registry.json")); err != nil {
+		t.Fatalf("registry.json must be left in place: %v", err)
+	}
+	if matches, _ := filepath.Glob(filepath.Join(x.st.Dir(), "registry.json.corrupt-*")); len(matches) != 0 {
+		t.Fatalf("a hook must not quarantine, found %v", matches)
 	}
 }

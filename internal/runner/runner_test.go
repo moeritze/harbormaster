@@ -316,8 +316,8 @@ func TestCheckStartTimeRefusesGroupWithoutStoredValue(t *testing.T) {
 	if !errors.Is(err, runner.ErrNoStartTime) {
 		t.Fatalf("expected ErrNoStartTime, got %v", err)
 	}
-	if !strings.Contains(err.Error(), "harbormaster ls") {
-		t.Fatalf("the message must name the repair: %v", err)
+	if !strings.Contains(err.Error(), "harbormaster release") {
+		t.Fatalf("the message must name the way out: %v", err)
 	}
 
 	unavailable := func(int) (string, error) { return "", nil } // windows

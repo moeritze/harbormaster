@@ -1,7 +1,7 @@
 package registry_test
 
 import (
-	"fmt"
+	"os"
 	"path/filepath"
 	"testing"
 	"time"
@@ -108,68 +108,35 @@ func TestPruneKeepsEntryThatFailsOnlyTheFirstProbe(t *testing.T) {
 	}
 }
 
-// TestPruneBackfillsMissingStartTime covers the repair path for entries that
-// carry no start time: a surviving entry gets one recorded and the registry
-// is written back even though nothing was pruned. Without this an entry
-// written by an older build could never be group-signalled again.
-func TestPruneBackfillsMissingStartTime(t *testing.T) {
+// TestPruneNeverFillsStartTime pins #11: a start time read after
+// registration cannot prove the pid was not reused in between, so no read or
+// prune may record one. The entry's pid is this live test process, so a
+// lookup would succeed if anything still tried.
+func TestPruneNeverFillsStartTime(t *testing.T) {
 	now := fixedNow()
 	dir := filepath.Join(t.TempDir(), "hm")
-	seed, err := registry.Open(dir, alwaysAlive{}, func() time.Time { return now })
-	if err != nil {
-		t.Fatal(err)
-	}
-	seed.StartTimeOf = nil
-	if err := seed.Update(func(f *registry.File) error {
-		f.Entries = append(f.Entries,
-			registry.Entry{ID: "no-start", Port: 3000, PID: 42, StartedAt: now},
-			registry.Entry{ID: "has-start", Port: 3001, PID: 43, StartedAt: now, StartTime: "already"})
-		return nil
-	}); err != nil {
-		t.Fatal(err)
-	}
-
 	s, err := registry.Open(dir, alwaysAlive{}, func() time.Time { return now })
 	if err != nil {
 		t.Fatal(err)
 	}
-	var asked []int
-	s.StartTimeOf = func(pid int) string {
-		asked = append(asked, pid)
-		return fmt.Sprintf("start-%d", pid)
+	if err := s.Update(func(f *registry.File) error {
+		f.Entries = append(f.Entries, registry.Entry{ID: "no-start", Port: 3000, PID: os.Getpid(), StartedAt: now})
+		return nil
+	}); err != nil {
+		t.Fatal(err)
 	}
-	loaded, err := s.Load()
+	if _, err := s.Load(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Prune(); err != nil {
+		t.Fatal(err)
+	}
+	f, err := s.Peek()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(asked) != 1 || asked[0] != 42 {
-		t.Fatalf("only the entry without a start time may be looked up, asked %v", asked)
-	}
-	// The repair counts from the next read on: a start time read now says
-	// nothing about whether the pid was already reused before it was read,
-	// so the caller that triggered the repair still sees an unverified row.
-	for _, e := range loaded.Entries {
-		if e.ID == "no-start" && e.StartTime != "" {
-			t.Fatalf("the repairing read must still report the entry as unverified: %+v", e)
-		}
-	}
-
-	// The backfill must be persisted, not just applied in memory.
-	reader, err := registry.Open(dir, alwaysAlive{}, func() time.Time { return now })
-	if err != nil {
-		t.Fatal(err)
-	}
-	reader.StartTimeOf = nil
-	f, err := reader.Peek()
-	if err != nil {
-		t.Fatal(err)
-	}
-	got := map[string]string{}
-	for _, e := range f.Entries {
-		got[e.ID] = e.StartTime
-	}
-	if got["no-start"] != "start-42" || got["has-start"] != "already" {
-		t.Fatalf("start times after backfill: %v", got)
+	if len(f.Entries) != 1 || f.Entries[0].StartTime != "" {
+		t.Fatalf("start time must stay empty on disk: %+v", f.Entries)
 	}
 }
 
@@ -195,7 +162,6 @@ func TestPruneStopsAtTheProbeBudget(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	s.StartTimeOf = nil // keep the measurement about dialing only
 	s.ProbeBudget = time.Second
 
 	start := time.Now()

@@ -25,7 +25,6 @@ func TestRestoreAfterFailedKillSkipsEntriesThatWereAlreadyGone(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	st.StartTimeOf = nil
 	out := &bytes.Buffer{}
 	a := &app.App{Stdout: out, Stderr: out, Store: st, Prober: liveProber{}, Now: func() time.Time { return now }}
 	e := registry.Entry{ID: "gone", Port: 3600, PID: 4242, Session: "s1", StartedAt: now}

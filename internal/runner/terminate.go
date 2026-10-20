@@ -26,10 +26,10 @@ func Guard(pid int, uid func(int) (int, error)) error {
 }
 
 // ErrNoStartTime is returned for a group signal against an entry that never
-// recorded a start time. The message names the repair, because the entry is
-// repairable: `harbormaster ls` prunes, and pruning backfills the start time
-// of every live entry that is missing one.
-var ErrNoStartTime = errors.New("entry has no recorded start time; refusing a process-group signal (run harbormaster ls to backfill, then retry)")
+// recorded a start time. Nothing fills one in later: a start time read after
+// registration cannot prove the pid was not reused in between, so the entry
+// stays unverifiable and the message names the ways out.
+var ErrNoStartTime = errors.New("entry has no recorded start time; refusing a process-group signal (stop the process yourself, or drop the entry with harbormaster release <port>)")
 
 // CheckStartTime refuses to signal pid when the process now occupying it is
 // not the one the entry was written for. stored is the start time recorded

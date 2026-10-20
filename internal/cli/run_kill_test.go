@@ -67,7 +67,7 @@ func TestKillForeignDeniedOwnAllowed(t *testing.T) {
 	}
 }
 
-// TestKillOwnEntryTerminatesRealProcess exercises terminateEntry end-to-end
+// TestKillOwnEntryTerminatesRealProcess exercises the kill path end-to-end
 // (runner.Guard + runner.Terminate) against a real child process, since those
 // only do anything meaningful against a live pid.
 func TestKillOwnEntryTerminatesRealProcess(t *testing.T) {
@@ -300,47 +300,31 @@ func TestNewEntryRecordsStartTime(t *testing.T) {
 	}
 }
 
-// TestKillRefusesGroupSignalForEntryWithoutStartTime and the backfill that
-// repairs it: an entry with no recorded start time cannot be checked for pid
-// reuse, and a process-GROUP signal against it could hit every process in
-// whatever group holds that id now. `ls` prunes, pruning backfills, and the
-// kill then goes through.
+// TestKillRefusesGroupSignalForEntryWithoutStartTime: an entry with no
+// recorded start time cannot be checked for pid reuse, and a process-GROUP
+// signal against it could hit every process in whatever group holds that id
+// now. Nothing repairs such a row later -- not even `ls` -- so the refusal
+// holds for as long as the entry exists.
 func TestKillRefusesGroupSignalForEntryWithoutStartTime(t *testing.T) {
 	h := newHarness(t, "s1", "/wt/a")
 	h.app.PidStartTime = func(int) (string, error) { return "t1", nil }
-	h.app.Store.StartTimeOf = func(int) string { return "t1" }
 	h.app.Terminate = func(int, bool, time.Duration) error { return nil }
 	// The parent shell is a real process of our uid, so runner.Guard passes
 	// and the missing start time is what decides.
 	h.seed(t, registry.Entry{ID: "nostart", Port: 3310, PID: os.Getppid(), Session: "s1", Spawned: true})
 
-	err := h.run("kill", "3310")
-	if c := exitCode(err); c != 1 || !strings.Contains(err.Error(), "no recorded start time") {
-		t.Fatalf("code %d err %v", c, err)
-	}
-	if !strings.Contains(err.Error(), "harbormaster ls") {
-		t.Fatalf("the refusal must name the repair: %v", err)
-	}
-	f, _ := h.app.Store.Peek()
-	if len(f.Entries) != 1 {
-		t.Fatalf("entry must survive a refused kill: %+v", f.Entries)
-	}
-	// The read that refused also repaired the row -- for the NEXT read.
-	if f.Entries[0].StartTime != "t1" {
-		t.Fatalf("the start time must have been backfilled and persisted: %+v", f.Entries)
-	}
-
-	// `harbormaster ls` is the step the message asks for; afterwards the
-	// entry has a start time that predates the kill, and the kill works.
-	if err := h.run("ls"); err != nil {
-		t.Fatalf("ls: %v", err)
-	}
-	if err := h.run("kill", "3310"); err != nil {
-		t.Fatalf("kill must work once the start time is recorded: %v", err)
-	}
-	f, _ = h.app.Store.Peek()
-	if len(f.Entries) != 0 {
-		t.Fatalf("the entry must be gone after the kill: %+v", f.Entries)
+	for _, step := range []string{"first kill", "kill after ls"} {
+		err := h.run("kill", "3310")
+		if c := exitCode(err); c != 1 || !strings.Contains(err.Error(), "no recorded start time") {
+			t.Fatalf("%s: code %d err %v", step, c, err)
+		}
+		f, _ := h.app.Store.Peek()
+		if len(f.Entries) != 1 || f.Entries[0].StartTime != "" {
+			t.Fatalf("%s: entry must survive unchanged: %+v", step, f.Entries)
+		}
+		if err := h.run("ls"); err != nil {
+			t.Fatalf("ls: %v", err)
+		}
 	}
 }
 

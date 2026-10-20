@@ -22,11 +22,6 @@ const maxProbePerCall = 200
 // budget is simply not probed this call and is carried to the next one.
 const defaultProbeBudget = time.Second
 
-// maxBackfillPerCall bounds how many start-time lookups one read performs.
-// Each one forks a helper, so a huge registry is repaired over a few calls
-// rather than making a single `ls` fork hundreds of processes.
-const maxBackfillPerCall = 200
-
 // probeWorkers bounds concurrent port dials.
 const probeWorkers = 8
 
@@ -34,31 +29,19 @@ const probeWorkers = 8
 // so tests can drop it to zero.
 var reprobeDelay = 100 * time.Millisecond
 
-// pruneOptions carries the injectable parts of one prune.
-type pruneOptions struct {
-	// startTimeOf backfills a surviving entry's missing start time. nil
-	// disables backfilling.
-	startTimeOf func(pid int) string
-	// budget bounds the probe phase; zero means defaultProbeBudget.
-	budget time.Duration
-}
-
 // pruneEntries removes entries whose process has died or whose port has
 // stopped listening (after ListenGrace) and returns a HistoryRecord for
-// each one removed; f.Entries is left holding only surviving entries. The
-// second return value lists the indices in f.Entries whose start time was
-// backfilled, so the caller knows the document must be written back and
-// which rows were repaired.
+// each one removed; f.Entries is left holding only surviving entries.
+// budget bounds the probe phase; zero means defaultProbeBudget.
 //
 // Port probes are batched: every candidate is dialed once concurrently,
 // the re-probe delay is waited ONCE, and only the ports that failed the
 // first pass are dialed again. Fifty stale entries therefore cost about one
 // delay plus a handful of dials, not fifty delays in a row.
-func pruneEntries(f *File, p Prober, now time.Time, opt pruneOptions) ([]HistoryRecord, []int) {
+func pruneEntries(f *File, p Prober, now time.Time, budget time.Duration) []HistoryRecord {
 	if p == nil {
-		return nil, nil
+		return nil
 	}
-	budget := opt.budget
 	if budget <= 0 {
 		budget = defaultProbeBudget
 	}
@@ -86,34 +69,7 @@ func pruneEntries(f *File, p Prober, now time.Time, opt pruneOptions) ([]History
 		}
 	}
 	f.Entries = kept
-	return pruned, backfillStartTimes(f.Entries, opt.startTimeOf)
-}
-
-// backfillStartTimes records the start time of surviving entries that have
-// none. Their pid was just confirmed alive, so the value read now describes
-// the very process the entry is about. An entry without a start time cannot
-// be checked for pid reuse at all, and a process-group signal is refused for
-// it outright (runner.CheckStartTime), so this is what makes `harbormaster
-// ls` -- which prunes, hence reaches here -- the way to repair such a row.
-func backfillStartTimes(entries []Entry, lookup func(pid int) string) []int {
-	if lookup == nil {
-		return nil
-	}
-	var filled []int
-	tried := 0
-	for i := range entries {
-		if entries[i].StartTime != "" || entries[i].PID <= 0 {
-			continue
-		}
-		if tried++; tried > maxBackfillPerCall {
-			break
-		}
-		if st := lookup(entries[i].PID); st != "" {
-			entries[i].StartTime = st
-			filled = append(filled, i)
-		}
-	}
-	return filled
+	return pruned
 }
 
 // closedPorts reports which candidate ports failed two probes reprobeDelay
