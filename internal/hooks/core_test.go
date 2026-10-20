@@ -547,12 +547,15 @@ func TestSessionEndGivesUpOnHeldLock(t *testing.T) {
 		t.Skip("registry lock is a no-op on windows")
 	}
 	x := newH(t)
-	held, release := make(chan struct{}), make(chan struct{})
+	held, release, done := make(chan struct{}), make(chan struct{}), make(chan struct{})
 	go func() {
+		defer close(done)
 		_ = x.st.Update(func(*registry.File) error { close(held); <-release; return nil })
 	}()
 	<-held
-	defer close(release)
+	// The holder writes the registry once released: wait for it, or that
+	// write races t.TempDir's cleanup.
+	defer func() { close(release); <-done }()
 	start := time.Now()
 	if r := x.core.Handle(endEv("me", "logout")); r.Decision != hooks.Allow {
 		t.Fatalf("%+v", r)
