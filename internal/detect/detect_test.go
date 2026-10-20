@@ -86,6 +86,8 @@ func TestClassify(t *testing.T) {
 		{"npm run dev > dev.log 2>&1 &", detect.ServerStart, nil, nil, false},
 		{"npm run dev -- --port 3000", detect.ServerStart, []int{3000}, nil, false},
 		{"npx vite", detect.ServerStart, nil, nil, false},
+		{"npm run dev:host", detect.ServerStart, nil, nil, false},
+		{"pnpm dev:web", detect.ServerStart, nil, nil, false},
 		{"npm install && npm run dev", detect.ServerStart, nil, nil, false},
 		// wrapped
 		{"hm run --label x -- npm run dev", detect.ServerStart, nil, nil, true},
