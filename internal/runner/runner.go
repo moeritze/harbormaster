@@ -62,6 +62,12 @@ func Run(ctx context.Context, a *app.App, opts Options, register Register) (int,
 	}
 	setProcessGroup(cmd)
 
+	// Subscribe before Start: a signal that lands while register waits for
+	// the lock must stop the child, not kill harbormaster and orphan it.
+	sigs := make(chan os.Signal, 2)
+	signal.Notify(sigs, syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP)
+	defer signal.Stop(sigs)
+
 	if err := cmd.Start(); err != nil {
 		return 3, fmt.Errorf("start %q: %w", opts.Args[0], err)
 	}
@@ -69,7 +75,7 @@ func Run(ctx context.Context, a *app.App, opts Options, register Register) (int,
 
 	// Start reaping immediately, before register: if register fails below,
 	// Terminate must race a concurrent Wait rather than an unreaped zombie.
-	// alive(pid) cannot tell a zombie from a live process, so without this
+	// kill(pid, 0) cannot tell a zombie from a live process, so without this
 	// the register-failure path would burn the full KillTimeout every time.
 	//
 	// The group sweep that follows a natural exit happens HERE -- after
@@ -82,8 +88,8 @@ func Run(ctx context.Context, a *app.App, opts Options, register Register) (int,
 	// window in which the rest of this process could run on while -pid came
 	// to mean an unrelated group. It stays cheap: the leader is already
 	// reaped, so kill(-pid, SIGTERM) either reaches surviving members or
-	// returns ESRCH, alive(pid) is false immediately, and none of
-	// KillTimeout is burned.
+	// returns ESRCH, and Terminate returns as soon as the group is empty;
+	// only a member that ignores SIGTERM costs KillTimeout before SIGKILL.
 	waitErr := make(chan error, 1)
 	done := make(chan struct{})
 	go func() {
@@ -102,10 +108,6 @@ func Run(ctx context.Context, a *app.App, opts Options, register Register) (int,
 	defer unregister(a, entry)
 
 	go warnIfNotListening(a, opts.Port, opts.ListenTimeout, done)
-
-	sigs := make(chan os.Signal, 2)
-	signal.Notify(sigs, syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP)
-	defer signal.Stop(sigs)
 
 	select {
 	case err := <-waitErr:

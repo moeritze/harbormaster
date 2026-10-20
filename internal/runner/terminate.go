@@ -68,14 +68,14 @@ func CheckStartTime(pid int, stored string, group bool, lookup func(int) (string
 }
 
 // Terminate sends SIGTERM (to the process group when group is true), waits up
-// to timeout for exit, then SIGKILL.
+// to timeout for every target process to exit, then SIGKILL.
 func Terminate(pid int, group bool, timeout time.Duration) error {
 	if err := sendTerm(pid, group); err != nil {
 		return err
 	}
 	deadline := time.Now().Add(timeout)
 	for time.Now().Before(deadline) {
-		if !alive(pid) {
+		if gone(pid, group) {
 			return nil
 		}
 		time.Sleep(50 * time.Millisecond)

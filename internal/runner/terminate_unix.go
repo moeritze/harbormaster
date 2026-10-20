@@ -56,9 +56,13 @@ func sendKill(pid int, group bool) error {
 	return err
 }
 
-func alive(pid int) bool {
-	err := syscall.Kill(pid, 0)
-	return err == nil || errors.Is(err, syscall.EPERM)
+// gone reports that nothing is left to wait for: for a group target, no
+// member of the group remains (EPERM counts as gone there, the darwin
+// zombie-leader quirk sendKill documents); for a single pid, EPERM is alive.
+func gone(pid int, group bool) bool {
+	t := target(pid, group)
+	err := syscall.Kill(t, 0)
+	return errors.Is(err, syscall.ESRCH) || (t < 0 && errors.Is(err, syscall.EPERM))
 }
 
 // exitCode reports a signaled child as 128+signal (shell convention),
