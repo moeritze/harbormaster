@@ -42,6 +42,18 @@ func TestClassify(t *testing.T) {
 		// Only harbormaster's own subcommands are blanked out: "hm x" is
 		// some other program (or a typo), and the kill after it is real.
 		{"hm x lsof -ti:3100 | xargs kill", detect.Kill, []int{3100}, nil, false},
+		// A newline ends an hm clause like ; & | do.
+		{"hm ls\nkill -9 4242", detect.Kill, nil, []int{4242}, false},
+		// lsof flags in any order, backticks, group kills, path-qualified kill, fuser flags.
+		{"lsof -i :3000 -t | xargs kill -9", detect.Kill, []int{3000}, nil, false},
+		{"lsof -nP -iTCP:3000 -sTCP:LISTEN -t | xargs kill", detect.Kill, []int{3000}, nil, false},
+		{"kill -9 `lsof -t -i:3000`", detect.Kill, []int{3000}, nil, false},
+		{"fuser -n tcp -k 3000", detect.Kill, []int{3000}, nil, false},
+		{"kill -9 -1234", detect.Kill, nil, []int{1234}, false},
+		{"kill -TERM -- -1234", detect.Kill, nil, []int{1234}, false},
+		{"/bin/kill 1234", detect.Kill, nil, []int{1234}, false},
+		// "-9" alone is a signal, not a negative group target.
+		{"xargs kill -9", detect.None, nil, nil, false},
 		// server start, unwrapped
 		{"npm run dev", detect.ServerStart, nil, nil, false},
 		{"npm run dev -- --port 3001", detect.ServerStart, []int{3001}, nil, false},
@@ -72,6 +84,9 @@ func TestClassify(t *testing.T) {
 		{"go run ./cmd/api --port 9000", detect.ServerStart, []int{9000}, nil, false},
 		{"cargo run -- --port 9001", detect.ServerStart, []int{9001}, nil, false},
 		{"npm run dev > dev.log 2>&1 &", detect.ServerStart, nil, nil, false},
+		{"npm run dev -- --port 3000", detect.ServerStart, []int{3000}, nil, false},
+		{"npx vite", detect.ServerStart, nil, nil, false},
+		{"npm install && npm run dev", detect.ServerStart, nil, nil, false},
 		// wrapped
 		{"hm run --label x -- npm run dev", detect.ServerStart, nil, nil, true},
 		{"hm run -- npm run dev", detect.ServerStart, nil, nil, true},
@@ -84,6 +99,11 @@ func TestClassify(t *testing.T) {
 		{"npm run build", detect.None, nil, nil, false},
 		{"npm test", detect.None, nil, nil, false},
 		{"vite build", detect.None, nil, nil, false},
+		{"npm i -D vite", detect.None, nil, nil, false},
+		{"npm install vite", detect.None, nil, nil, false},
+		{"yarn add vite", detect.None, nil, nil, false},
+		{"pnpm add -D vite", detect.None, nil, nil, false},
+		{"npm run dev-db-migrate", detect.None, nil, nil, false},
 		{"git status", detect.None, nil, nil, false},
 		{"ls -la", detect.None, nil, nil, false},
 		{"curl http://localhost:3000/health", detect.None, []int{3000}, nil, false},
