@@ -91,7 +91,7 @@ var (
 	}
 
 	serverPatterns = []pattern{
-		{"pkg-script", regexp.MustCompile(`(?:^|[\s;&|(])(?:npm|pnpm|yarn|bun)\s+(?:run\s+)?(?:dev|start|serve|preview)(?:$|[\s;&|)])`)},
+		{"pkg-script", regexp.MustCompile(`(?:^|[\s;&|(])(?:npm|pnpm|yarn|bun)\s+(?:run\s+)?(?:dev|start|serve|preview)(?:$|[\s;&|)]|:\S*)`)},
 		{"next", regexp.MustCompile(`(?:^|[\s;&|(])(?:npx\s+)?next\s+dev\b`)},
 		{"vite", regexp.MustCompile(`(?:^|[\s;&|(])(?:npx\s+)?vite(?:\s+(?:preview|dev|serve))?(?:\s|$)`)},
 		{"astro", regexp.MustCompile(`(?:^|[\s;&|(])(?:npx\s+)?astro\s+dev\b`)},
