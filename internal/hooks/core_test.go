@@ -399,6 +399,9 @@ func TestCursorSessionEndReleasesButNeverTerminates(t *testing.T) {
 // Terminate is really the one the core calls, so the Cursor test above
 // proves an absence and not a broken wiring.
 func TestClaudeSessionEndStillTerminates(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("PidUID is unsupported on windows, so Guard refuses every pid")
+	}
 	x := newH(t)
 	var got []int
 	x.core.Terminate = func(pid int, _ bool, _ time.Duration) error { got = append(got, pid); return nil }

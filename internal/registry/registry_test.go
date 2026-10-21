@@ -220,6 +220,9 @@ func TestFailedUpdateDoesNotPersistPrunedHistory(t *testing.T) {
 }
 
 func TestConcurrentUpdatesUnderLockProduceValidFile(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("registry lock is a no-op on windows (SECURITY.md)")
+	}
 	s := open(t)
 	var wg sync.WaitGroup
 	for i := 0; i < 20; i++ {
@@ -539,6 +542,9 @@ func TestOpenRefusesGroupOtherWritableStateDir(t *testing.T) {
 // pre-existing directory that is not writable by group or other is accepted
 // and, per the existing rule, never re-chmodded.
 func TestOpenAcceptsExistingPrivateDirUnchanged(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("windows has no POSIX mode bits")
+	}
 	dir := filepath.Join(t.TempDir(), "hm")
 	if err := os.Mkdir(dir, 0o700); err != nil {
 		t.Fatal(err)
